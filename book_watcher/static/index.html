@@ -26,6 +26,7 @@
   <symbol id="i-full" viewBox="0 0 24 24"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></symbol>
   <symbol id="i-chart" viewBox="0 0 24 24"><path d="M5 19V11M12 19V5M19 19v-6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
   <symbol id="i-left" viewBox="0 0 24 24"><path d="M14.5 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-exit" viewBox="0 0 24 24"><path d="M9 4v4a1 1 0 0 1-1 1H4M20 9h-4a1 1 0 0 1-1-1V4M15 20v-4a1 1 0 0 1 1-1h4M4 15h4a1 1 0 0 1 1 1v4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></symbol>
   <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
   <symbol id="i-vol" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" fill="currentColor"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
 </svg>
@@ -131,9 +132,12 @@
   <div class="body">
     <main class="stage">
       <div class="screen">
-        <div id="chapterLabel" class="chapter-label"></div>
         <div id="prevLine" class="prev-line"></div>
         <div id="subtitle" class="subtitle"></div>
+        <div class="cinema-corner">
+          <button class="corner-btn" id="cinemaMark" title="Mark (M)" aria-label="Mark this sentence"><svg><use href="#i-mark"/></svg></button>
+          <button class="corner-btn" id="cinemaExit" title="Exit full screen" aria-label="Exit full screen"><svg><use href="#i-exit"/></svg></button>
+        </div>
       </div>
 
       <div class="deck">

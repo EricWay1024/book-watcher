@@ -242,10 +242,6 @@ select {
   padding: 32px clamp(16px, 5vw, 72px);
   text-align: center;
 }
-.chapter-label {
-  color: var(--faint); font-size: 13px; letter-spacing: .08em; text-transform: uppercase;
-  margin-bottom: 28px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
 .prev-line {
   font-family: var(--font-sub); font-size: calc(var(--sub-size) * .42); line-height: 1.5;
   color: var(--faint); max-width: 40em; margin-bottom: 1em; min-height: 1.5em;
@@ -419,8 +415,20 @@ kbd {
 /* ---------------------------------------------------------- full screen: the sentence and nothing else */
 .screen { position: relative; }
 body.cinema .topbar, body.cinema .deck, body.cinema .sidebar, body.cinema .settings,
-body.cinema .chapter-label, body.cinema .prev-line { display: none !important; }
-body.cinema .screen { padding: 6vh 7vw; cursor: default; }
+body.cinema .prev-line { display: none !important; }
+/* taps: left third = previous, middle = play/pause, right third = next (no visible zones) */
+body.cinema .screen { padding: 6vh 7vw; cursor: default; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+.cinema-corner { display: none; }
+body.cinema .cinema-corner { display: flex; gap: 2px; position: fixed; right: 10px; bottom: 10px; z-index: 10; }
+.corner-btn {
+  display: grid; place-items: center; width: 32px; height: 32px; padding: 0;
+  border: 0; border-radius: 8px; background: none; color: var(--text); opacity: .28; transition: opacity .2s;
+}
+.corner-btn:hover, .corner-btn:focus-visible { opacity: .9; }
+.corner-btn svg { width: 16px; height: 16px; }
+.corner-btn.on { color: var(--mark-line); opacity: .8; }
+#cinemaExit { display: none; }
+body.no-fs #cinemaExit { display: grid; } /* only where real full screen is unavailable (iPhone) */
 body.cinema.idle, body.cinema.idle .screen { cursor: none; }
 body.cinema .subtitle { max-width: 26em; transition: opacity .25s; }
 body.cinema.paused .subtitle { opacity: .45; } /* the only pause indicator: the sentence dims */
@@ -435,7 +443,6 @@ body.cinema.paused .subtitle { opacity: .45; } /* the only pause indicator: the 
   .book-title { display: none; }
   .screen { padding-top: 20px; padding-bottom: 12px; }
   .subtitle { font-size: calc(var(--sub-size) * .62); }
-  .chapter-label { margin-bottom: 14px; }
   .play { width: 72px; height: 72px; }
   .icon-btn.lg { width: 44px; height: 44px; }
   .quick-ctl input { width: 90px; }

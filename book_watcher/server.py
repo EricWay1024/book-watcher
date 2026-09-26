@@ -287,6 +287,22 @@ def make_app(lib: Library, password: str = "", cache_mb: int = 0) -> web.Applica
             lib.mark_finished(book_id)
         return web.json_response({"ok": True})
 
+    @routes.get("/api/settings")
+    async def get_settings(_):
+        return web.json_response(lib._read(lib.root / "settings.json", {}))
+
+    @routes.put("/api/settings")
+    @routes.post("/api/settings")  # sendBeacon when the page is hidden
+    async def put_settings(request):
+        text = await request.text()
+        body = json.loads(text)
+        if not isinstance(body, dict) or len(text) > 20000:
+            return web.json_response({"error": "bad settings"}, status=400)
+        current = lib._read(lib.root / "settings.json", {})
+        if body.get("updated", 0) >= current.get("updated", 0):  # newest change wins
+            lib._write(lib.root / "settings.json", body)
+        return web.json_response({"ok": True})
+
     @routes.get("/api/stats")
     async def stats(_):
         books = await asyncio.to_thread(lib.list)

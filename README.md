@@ -12,8 +12,12 @@ uv run book-watcher path/to/book.epub   # add a book and open it straight away
 Then drop more EPUBs onto the library page.
 
 - **Play / pause** with the big button or <kbd>Space</kbd>. <kbd>←</kbd>/<kbd>→</kbd> sentence, <kbd>↑</kbd>/<kbd>↓</kbd> paragraph.
-- **Full screen** (<kbd>F</kbd>, or the ⛶ button): only the sentence being read, nothing else. <kbd>Space</kbd>
-  (or a click) still pauses, and the sentence dims while paused. <kbd>Esc</kbd>, <kbd>F</kbd> or a double-click leaves.
+- **Full screen** (<kbd>F</kbd>, or the ⛶ button): only the sentence being read. Tap the left third of the
+  screen for the previous sentence, the middle to pause/resume, the right third for the next one
+  (the zones are invisible). <kbd>Space</kbd> also pauses, and the sentence dims while paused. A faint
+  bookmark in the corner marks the sentence. <kbd>Esc</kbd> or <kbd>F</kbd> leaves.
+- **Settings follow you across devices**: font, size, theme, speed, volume, pauses, engine and voices are
+  kept on the server (newest change wins). Sidebar layout stays per device.
 - **Highlights** page (from the library): every marked sentence across your books, grouped by book and
   chapter or newest first, with search, "open in book", and export to Markdown or CSV (opens in Excel).
 - **Reading stats** page, in the spirit of WeChat Read (微信读书): listening time per week, month, year or

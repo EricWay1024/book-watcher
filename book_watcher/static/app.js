@@ -47,7 +47,49 @@ const FONTS = {
   kai: ['--font-kai', '--font-kai-en'], system: ['--font-system', '--font-system'],
 };
 
-function saveSettings() { store.set('settings', settings); }
+// Settings that follow you across devices (kept on the server). Sidebar layout and the browser
+// engine's voices stay per device: they depend on the screen and on what the device has installed.
+const SYNCED = ['font', 'size', 'sideSize', 'showPrev', 'theme', 'rate', 'volume', 'gap', 'paraGap', 'engine', 'lang', 'zhVoice', 'enVoice'];
+let syncTimer = null;
+
+function saveSettings(local = false) {
+  store.set('settings', settings);
+  if (local) return;
+  store.set('settingsUpdated', Date.now());
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(pushSettings, 1000);
+}
+
+function syncedSettings() {
+  const out = { updated: store.get('settingsUpdated', Date.now()) };
+  for (const k of SYNCED) out[k] = settings[k];
+  return JSON.stringify(out);
+}
+
+function pushSettings(beacon = false) {
+  clearTimeout(syncTimer);
+  syncTimer = null;
+  if (beacon) navigator.sendBeacon('/api/settings', new Blob([syncedSettings()], { type: 'application/json' }));
+  else fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: syncedSettings() }).then(checkAuth).catch(() => {});
+}
+
+async function pullSettings() {
+  if (syncTimer) return; // a local change is about to be pushed; it is the newest
+  let remote;
+  try { remote = await api('/api/settings'); } catch { return; }
+  const localUpdated = store.get('settingsUpdated', 0);
+  const customised = SYNCED.some(k => settings[k] !== DEFAULTS[k]);
+  if (!remote.updated) { if (localUpdated || customised) pushSettings(); return; } // first device to sync seeds it
+  if (remote.updated <= localUpdated) { if (remote.updated < localUpdated) pushSettings(); return; }
+  const engineBefore = settings.engine;
+  for (const k of SYNCED) if (k in remote) settings[k] = remote[k];
+  store.set('settingsUpdated', remote.updated);
+  saveSettings(true);
+  applySettings();
+  populateVoices();
+  if (book) renderStage();
+  if (playing && settings.engine !== engineBefore) jump(cur);
+}
 
 function applySettings() {
   const root = document.documentElement;
@@ -86,7 +128,7 @@ function applySettings() {
 
 function setSetting(key, value) {
   settings[key] = value;
-  saveSettings();
+  saveSettings(!SYNCED.includes(key));
   applySettings();
   if (key === 'showPrev' && book) renderStage();
   if (key === 'engine') { populateVoices(); if (playing) jump(cur); }
@@ -125,7 +167,7 @@ async function populateVoices() {
     sel.innerHTML = list.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('');
     sel.value = settings[key];
     if (sel.value !== settings[key]) settings[key] = sel.value;
-    sel.onchange = () => { settings[key] = sel.value; saveSettings(); if (playing) jump(cur); };
+    sel.onchange = () => { settings[key] = sel.value; saveSettings(!SYNCED.includes(key)); if (playing) jump(cur); };
   };
   fill(zhSel, zh, zhKey);
   fill(enSel, en, enKey);
@@ -207,7 +249,8 @@ function applyServerMarks(serverMarks) {
 
 // Coming back to a tab: pick up marks made on other devices meanwhile.
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') { flushReading(true); return; }
+  if (document.visibilityState === 'hidden') { flushReading(true); if (syncTimer) pushSettings(true); return; }
+  pullSettings();
   if (!book) return;
   const id = book.id;
   api(`/api/books/${id}/state`).then(st => { if (book?.id === id) applyServerMarks(st.marks || {}); }).catch(() => {});
@@ -400,11 +443,13 @@ function setCinema(on) {
   document.body.classList.toggle('cinema', on);
   if (on) {
     document.activeElement?.blur();
-    document.documentElement.requestFullscreen?.().catch(() => {}); // the class alone still works if refused
+    const fs = document.documentElement.requestFullscreen?.();
+    if (fs) fs.catch(() => document.body.classList.add('no-fs')); // the class alone still works if refused
+    else document.body.classList.add('no-fs');
     pokeIdle();
   } else {
     clearTimeout(idleTimer);
-    document.body.classList.remove('idle');
+    document.body.classList.remove('idle', 'no-fs');
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     requestAnimationFrame(() => scrollToCurrent('instant'));
   }
@@ -463,12 +508,15 @@ function renderStage() {
   prev.hidden = !settings.showPrev;
 
   const ch = chapterOf(cur);
-  $('#chapterLabel').textContent = book.chapters[ch]?.title || '';
   if ($('#chapterSelect').value !== String(ch)) $('#chapterSelect').value = ch;
   const btn = $('#btnMarkCur');
   btn.classList.toggle('on', cur in marks);
   $('use', btn).setAttribute('href', cur in marks ? '#i-mark-on' : '#i-mark');
   $('span', btn).textContent = cur in marks ? 'Marked' : 'Mark';
+  const cm = $('#cinemaMark');
+  cm.classList.toggle('on', cur in marks);
+  $('use', cm).setAttribute('href', cur in marks ? '#i-mark-on' : '#i-mark');
+  cm.title = cur in marks ? 'Unmark (M)' : 'Mark (M)';
 }
 
 let scrubbing = false;
@@ -659,7 +707,7 @@ function showTab(name) {
   if (!['outline', 'context', 'marks'].includes(name)) name = 'context';
   $$('.tab').forEach(t => t.setAttribute('aria-selected', t.dataset.tab === name));
   for (const p of ['outline', 'context', 'marks']) $(`#pane-${p}`).hidden = p !== name;
-  if (settings.sideTab !== name) { settings.sideTab = name; saveSettings(); }
+  if (settings.sideTab !== name) { settings.sideTab = name; saveSettings(true); }
   requestAnimationFrame(() => {
     if (name === 'context' && follow) scrollToCurrent('instant');
     if (name === 'outline') { const r = $('#outline .ol-row.cur'); r?.scrollIntoView({ block: 'center' }); }
@@ -805,6 +853,7 @@ function bindRange(sel, key, parse = Number) {
 function init() {
   applySettings();
   initPages();
+  pullSettings();
   api('/api/config').then(c => { $('#signOut').hidden = !c.auth; }).catch(() => {});
   populateVoices();
 
@@ -838,8 +887,15 @@ function init() {
   $('#btnLibrary').addEventListener('click', () => (location.hash = '#/'));
   $('#btnFull').addEventListener('click', () => setCinema(true));
   // in full screen: click anywhere to play/pause, double-click to leave
-  $('.screen').addEventListener('click', () => document.body.classList.contains('cinema') && toggle());
-  $('.screen').addEventListener('dblclick', () => { getSelection().removeAllRanges(); setCinema(false); });
+  $('.screen').addEventListener('click', e => {
+    if (!document.body.classList.contains('cinema') || e.target.closest('.corner-btn')) return;
+    const x = e.clientX / window.innerWidth;
+    if (x < 1 / 3) jump(cur - 1);
+    else if (x > 2 / 3) jump(cur + 1);
+    else toggle();
+  });
+  $('#cinemaMark').addEventListener('click', e => { e.currentTarget.blur(); setMarks([cur], !(cur in marks)); });
+  $('#cinemaExit').addEventListener('click', () => setCinema(false));
   $('#chapterSelect').addEventListener('change', e => jump(chapterStartSentence(+e.target.value)));
 
   const bar = $('#progress');
