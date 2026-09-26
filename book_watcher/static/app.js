@@ -90,7 +90,7 @@ async function pullSettings() {
   saveSettings(true);
   applySettings();
   populateVoices();
-  if (book) renderStage();
+  if (book) { renderStage(); buildTimeIndex(); updateProgress(); }
   if (playing && settings.engine !== engineBefore) jump(cur);
 }
 
@@ -137,6 +137,10 @@ function setSetting(key, value) {
   saveSettings(!SYNCED.includes(key));
   applySettings();
   if (key === 'showPrev' && book) renderStage();
+  if (book && ['rate', 'gap', 'paraGap', 'lang', 'engine'].includes(key)) {
+    if (key === 'lang') buildTimeIndex();
+    updateProgress();
+  }
   if (key === 'engine') { populateVoices(); if (playing) jump(cur); }
 }
 
@@ -173,7 +177,7 @@ async function populateVoices() {
     sel.innerHTML = list.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('');
     sel.value = settings[key];
     if (sel.value !== settings[key]) settings[key] = sel.value;
-    sel.onchange = () => { settings[key] = sel.value; saveSettings(!SYNCED.includes(key)); if (playing) jump(cur); };
+    sel.onchange = () => { settings[key] = sel.value; saveSettings(!SYNCED.includes(key)); if (book) updateProgress(); if (playing) jump(cur); };
   };
   fill(zhSel, zh, zhKey);
   fill(enSel, en, enKey);
@@ -284,6 +288,66 @@ function flushReading(beacon = false) {
   else fetch('/api/read', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }).then(checkAuth).catch(() => {});
 }
 setInterval(() => { if (playing) flushReading(); }, 30000);
+setInterval(() => { if (playing && book && !scrubbing) updateProgress(); }, 1000); // count down smoothly
+
+/* ================================================================ time left */
+
+// Speech time is modelled per clip as  overhead + pace × weight(text), where the weight counts
+// characters (Han characters for Chinese voices, letters/digits for English ones) plus a little for
+// each comma-like pause. Defaults were fitted on Xiaoxiao / Ava clips (3% / 9% error per clip);
+// every clip that plays then nudges the pace for its voice, so estimates track the voice you use.
+const PACE_DEFAULT = { zh: 0.202, en: 0.077 };   // seconds per weight unit at 1×
+const CLIP_OVERHEAD = { zh: 0.95, en: 0.1 };     // leading/trailing silence per clip
+const HAN_RE = /[\u3400-\u9fff\uf900-\ufaff]/g, LAT_RE = /[A-Za-z0-9]/g, BREATH_RE = /[，,；;：:、—]/g;
+const count = (t, re) => (t.match(re) || []).length;
+function speechWeight(t, zh) {
+  return zh ? count(t, HAN_RE) + 0.35 * count(t, LAT_RE) + 1.2 * count(t, BREATH_RE)
+            : count(t, LAT_RE) + 4 * count(t, BREATH_RE);
+}
+const paces = store.get('paces', {});
+const voiceKey = zh => (settings.engine === 'edge' ? (zh ? settings.zhVoice : settings.enVoice) : `browser-${zh ? 'zh' : 'en'}`);
+const paceFor = zh => paces[voiceKey(zh)] ?? PACE_DEFAULT[zh ? 'zh' : 'en'];
+
+function learnPace(i, zh, seconds) {
+  const w = speechWeight(S[i].t, zh), lang = zh ? 'zh' : 'en';
+  if (w < 8 || !isFinite(seconds)) return;
+  const r = (seconds - CLIP_OVERHEAD[lang]) / w;
+  if (r < PACE_DEFAULT[lang] * 0.3 || r > PACE_DEFAULT[lang] * 3) return; // an outlier, not a pace
+  const key = voiceKey(zh);
+  paces[key] = (paces[key] ?? PACE_DEFAULT[lang]) * 0.92 + r * 0.08;
+  store.set('paces', paces);
+}
+
+// Prefix sums over sentences, so any range is O(1): weight and clip count per voice language,
+// and paragraph breaks. Rebuilt when a book opens or the language setting changes.
+let TI = null;
+function buildTimeIndex() {
+  const n = S.length, z = new Float64Array(n + 1), e = new Float64Array(n + 1);
+  const zn = new Uint32Array(n + 1), en = new Uint32Array(n + 1), pb = new Uint32Array(n + 1);
+  for (let i = 0; i < n; i++) {
+    const zh = zhFor(S[i].t), w = speechWeight(S[i].t, zh);
+    z[i + 1] = z[i] + (zh ? w : 0); e[i + 1] = e[i] + (zh ? 0 : w);
+    zn[i + 1] = zn[i] + (zh ? 1 : 0); en[i + 1] = en[i] + (zh ? 0 : 1);
+    pb[i + 1] = pb[i] + (i > 0 && S[i].p !== S[i - 1].p ? 1 : 0);
+  }
+  TI = { z, e, zn, en, pb };
+}
+
+// Seconds to play sentences [from, to) at the current speed, pauses included.
+function estimate(from, to) {
+  if (!TI || to <= from) return 0;
+  const d = a => a[to] - a[from];
+  const speech = d(TI.z) * paceFor(true) + d(TI.zn) * CLIP_OVERHEAD.zh
+               + d(TI.e) * paceFor(false) + d(TI.en) * CLIP_OVERHEAD.en;
+  const pauses = ((to - from) * settings.gap + (TI.pb[to] - TI.pb[from + 1 > to ? to : from + 1]) * settings.paraGap) / 1000;
+  return (speech + pauses) / settings.rate;
+}
+
+function fmtLeft(sec) {
+  const m = Math.round(sec / 60);
+  if (m < 1) return '<1 min';
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`;
+}
 
 /* ================================================================ playback */
 
@@ -342,6 +406,7 @@ function speakEdge(i, id) {
     if (!url) { await sleep(400); return finish('end'); }
     audio.onended = () => finish('end');
     audio.onerror = () => { lastError = 'could not play audio'; finish('error'); };
+    audio.onloadedmetadata = () => learnPace(i, zhFor(t), audio.duration);
     audio.src = url;
     audio.defaultPlaybackRate = audio.playbackRate = settings.rate;
     audio.volume = settings.volume;
@@ -369,7 +434,9 @@ function speakBrowser(i) {
     u.lang = u.voice?.lang || (zh ? 'zh-CN' : 'en-US');
     u.rate = settings.rate;
     u.volume = settings.volume;
-    u.onend = () => finish('end');
+    let t0 = 0;
+    u.onstart = () => { t0 = performance.now(); };
+    u.onend = () => { if (t0) learnPace(i, zh, (performance.now() - t0) / 1000 * u.rate); finish('end'); };
     u.onerror = e => finish(e.error === 'interrupted' || e.error === 'canceled' ? 'abort' : (lastError = e.error, 'error'));
     speakBrowser.keep = u; // Chrome drops events for garbage-collected utterances
     speechSynthesis.speak(u);
@@ -536,8 +603,13 @@ function showProgress(i) {
   const c = book.chapters[ch];
   const cStart = P[c.p].start;
   const cEnd = ch + 1 < book.chapters.length ? chapterStartSentence(ch + 1) - 1 : S.length - 1;
-  $('#progressLeft').textContent = scrubbing ? `→ ${c.title}: ${S[i].t}` : `${c.title} · ${i - cStart + 1} / ${cEnd - cStart + 1}`;
-  $('#progressRight').textContent = `${(100 * i / Math.max(1, S.length - 1)).toFixed(1)}%`;
+  const pct = `${(100 * i / Math.max(1, S.length - 1)).toFixed(1)}%`;
+  $('#progressLeft').textContent = scrubbing ? `→ ${c.title}: ${S[i].t}` : `${c.title} · ${i - cStart + 1} / ${cEnd - cStart + 1} · ${pct}`;
+  // time left from sentence i, minus what has already played of it
+  const played = !scrubbing && i === cur && (playing || midSentence) && isFinite(audio.currentTime) ? audio.currentTime / settings.rate : 0;
+  const chLeft = Math.max(0, estimate(i, cEnd + 1) - played), bookLeft = Math.max(0, estimate(i, S.length) - played);
+  $('#progressRight').textContent = `${fmtLeft(chLeft)} left in chapter · ${fmtLeft(bookLeft)} in book`;
+  $('#progressRight').title = 'Estimated at your current speed, including pauses';
 }
 
 /* ================================================================ rendering: context sidebar */
@@ -830,6 +902,7 @@ async function openBook(id, at) {
   $('#chapterSelect').innerHTML = b.chapters.map((c, i) => `<option value="${i}">${esc(c.title)}</option>`).join('');
   $('#progress').max = S.length - 1;
   buildOutline(b);
+  buildTimeIndex();
   $('#outlineFilter').value = '';
   showView('reader');
   setCur(clamp(at ?? st.pos ?? 0, 0, S.length - 1), { scroll: 'instant' });

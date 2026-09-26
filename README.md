@@ -13,6 +13,8 @@ Then drop more EPUBs onto the library page.
 
 - **Play / pause** with the big button or <kbd>Space</kbd>. <kbd>←</kbd>/<kbd>→</kbd> or <kbd>A</kbd>/<kbd>D</kbd> sentence,
   <kbd>↑</kbd>/<kbd>↓</kbd> or <kbd>W</kbd>/<kbd>S</kbd> paragraph.
+- **Time left** under the progress bar: minutes left in the chapter and hours left in the book at your
+  current speed, pauses included. The pace of each voice is learned from the clips you play.
 - **Full screen** (<kbd>F</kbd>, or the ⛶ button): only the sentence being read. Tap the left third of the
   screen for the previous sentence, the middle to pause/resume, the right third for the next one
   (the zones are invisible). <kbd>Space</kbd> also pauses. A faint

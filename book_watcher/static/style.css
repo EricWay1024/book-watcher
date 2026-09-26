@@ -358,7 +358,8 @@ select {
 #btnMarkCur.on { color: var(--mark-line); border-color: var(--mark-line); }
 
 .progress { width: min(720px, 100%); }
-.progress-text { display: flex; justify-content: space-between; gap: 12px; color: var(--faint); font-size: 12px; }
+.progress-text { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; color: var(--faint); font-size: 12px; }
+#progressRight { font-variant-numeric: tabular-nums; }
 .progress-text span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------------------------------------------------------- sidebar */
