@@ -69,12 +69,75 @@ class Library:
         return book
 
     def state(self, book_id: str) -> dict:
-        return self._read(self.dir(book_id) / "state.json", {"pos": 0, "marks": {}})
+        state = self._read(self.dir(book_id) / "state.json", {})
+        return {"pos": 0, "marks": {}, **state}
 
     def save_state(self, book_id: str, state: dict) -> None:
-        path = self.dir(book_id) / "state.json"
+        self._write(self.dir(book_id) / "state.json", state)
+
+    # State changes are read-modify-write with no await in between, so on the single event
+    # loop they can't interleave: two devices editing marks never lose each other's changes.
+    def set_pos(self, book_id: str, pos: int) -> None:
+        state = self.state(book_id)
+        state.update(pos=max(0, int(pos)), opened=time.time())
+        self.save_state(book_id, state)
+
+    def edit_marks(self, book_id: str, add: dict, remove: list) -> dict:
+        state = self.state(book_id)
+        marks = state["marks"]
+        for k, v in add.items():
+            if str(k).isdigit() and isinstance(v, dict):
+                marks[str(k)] = {"t": str(v.get("t", ""))[:2000], "at": v.get("at") or int(time.time() * 1000)}
+        for k in remove:
+            marks.pop(str(k), None)
+        self.save_state(book_id, state)
+        return marks
+
+    def mark_finished(self, book_id: str) -> None:
+        state = self.state(book_id)
+        state.setdefault("finished", int(time.time() * 1000))
+        self.save_state(book_id, state)
+
+    # ---- reading time: stats.json = {"days": {"YYYY-MM-DD": {"s": secs, "n": sentences, "b": {book: secs}}}}
+    def stats(self) -> dict:
+        return self._read(self.root / "stats.json", {"days": {}})
+
+    def add_reading(self, book_id: str, day: str, seconds: float, sentences: int) -> None:
+        stats = self.stats()
+        d = stats["days"].setdefault(day, {"s": 0, "n": 0, "b": {}})
+        d["s"] = round(d["s"] + seconds, 1)
+        d["n"] += sentences
+        d["b"][book_id] = round(d["b"].get(book_id, 0) + seconds, 1)
+        self._write(self.root / "stats.json", stats)
+
+    def chapter_titles(self, book: dict) -> list[str]:
+        """Chapter title for every sentence index."""
+        starts = {c["p"]: c["title"] for c in book["chapters"]}
+        out, title = [], ""
+        for i, para in enumerate(book["paras"]):
+            title = starts.get(i, title)
+            out += [title] * len(para["s"])
+        return out
+
+    def highlights(self) -> list[dict]:
+        out = []
+        for b in self.list():
+            marks = self.state(b["id"])["marks"]
+            if not marks:
+                continue
+            chapters = self.chapter_titles(self.book(b["id"]))
+            items = sorted(
+                ({"i": int(k), "t": v.get("t", ""), "at": v.get("at", 0),
+                  "ch": chapters[int(k)] if int(k) < len(chapters) else ""} for k, v in marks.items()),
+                key=lambda m: m["i"],
+            )
+            out.append({"id": b["id"], "title": b["title"], "author": b["author"], "marks": items})
+        return out
+
+    @staticmethod
+    def _write(path: Path, data) -> None:
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(state, ensure_ascii=False))
+        tmp.write_text(json.dumps(data, ensure_ascii=False))
         tmp.replace(path)
 
     def list(self) -> list[dict]:
@@ -90,7 +153,7 @@ class Library:
             out.append({
                 "id": d.name, "title": b["title"], "author": b["author"], "sentences": b["sentences"],
                 "pos": st.get("pos", 0), "marks": len(st.get("marks", {})),
-                "opened": st.get("opened", meta.get("added", 0)),
+                "opened": st.get("opened", meta.get("added", 0)), "finished": st.get("finished"),
             })
         return sorted(out, key=lambda b: -b["opened"])
 
@@ -158,9 +221,13 @@ def make_app(lib: Library, password: str = "", cache_mb: int = 0) -> web.Applica
     async def config(_):
         return web.json_response({"auth": auth is not None})
 
+    # Asset URLs carry a content hash, so a deploy can never leave a browser on stale JS.
+    version = hashlib.sha1(b"".join(f.read_bytes() for f in sorted(STATIC.iterdir()) if f.is_file())).hexdigest()[:10]
+    index_html = (STATIC / "index.html").read_text().replace("__V__", version)
+
     @routes.get("/")
     async def index(_):
-        return web.FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
+        return web.Response(text=index_html, content_type="text/html", headers={"Cache-Control": "no-cache"})
 
     @routes.get("/api/books")
     async def books(_):
@@ -193,10 +260,43 @@ def make_app(lib: Library, password: str = "", cache_mb: int = 0) -> web.Applica
     @routes.put("/api/books/{id}/state")
     @routes.post("/api/books/{id}/state")  # navigator.sendBeacon on page close
     async def put_state(request):
-        state = json.loads(await request.text())
-        state["opened"] = time.time()
-        lib.save_state(request.match_info["id"], state)
+        # Position only. Marks go through /marks as changes, so a stale tab can't overwrite them
+        # (older pages still send "marks" here; it is ignored).
+        body = json.loads(await request.text())
+        lib.set_pos(request.match_info["id"], body.get("pos", 0))
         return web.json_response({"ok": True})
+
+    @routes.post("/api/books/{id}/marks")
+    async def marks(request):
+        body = await request.json()
+        marks = lib.edit_marks(request.match_info["id"], body.get("add") or {}, body.get("remove") or [])
+        return web.json_response({"marks": marks})
+
+    @routes.post("/api/read")
+    async def read(request):
+        body = json.loads(await request.text())  # also sent by sendBeacon
+        book_id, day = str(body.get("book", "")), str(body.get("day", ""))
+        lib.dir(book_id)
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+            return web.json_response({"error": "bad day"}, status=400)
+        seconds = min(max(float(body.get("seconds", 0)), 0), 900)  # a flush covers at most ~30 s
+        sentences = min(max(int(body.get("sentences", 0)), 0), 2000)
+        if seconds or sentences:
+            lib.add_reading(book_id, day, seconds, sentences)
+        if body.get("finished"):
+            lib.mark_finished(book_id)
+        return web.json_response({"ok": True})
+
+    @routes.get("/api/stats")
+    async def stats(_):
+        books = await asyncio.to_thread(lib.list)
+        for b in books:
+            b["markTimes"] = [m.get("at", 0) for m in lib.state(b["id"])["marks"].values()]
+        return web.json_response({"days": lib.stats()["days"], "books": books})
+
+    @routes.get("/api/highlights")
+    async def highlights(_):
+        return web.json_response(await asyncio.to_thread(lib.highlights))
 
     @routes.get("/api/voices")
     async def voices(_):

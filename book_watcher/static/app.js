@@ -169,7 +169,7 @@ const chapterStartSentence = c => P[book.chapters[c].p].start;
 /* ================================================================ state persistence */
 
 let saveTimer = null;
-function statePayload() { return JSON.stringify({ pos: cur, marks }); }
+function statePayload() { return JSON.stringify({ pos: cur }); }
 function saveSoon() {
   if (!book) return;
   clearTimeout(saveTimer);
@@ -183,7 +183,58 @@ function saveNow() {
 }
 addEventListener('pagehide', () => {
   if (book && saveTimer) navigator.sendBeacon(`/api/books/${book.id}/state`, new Blob([statePayload()], { type: 'application/json' }));
+  flushReading(true);
 });
+
+// Marks are sent as changes, never as the whole set, so two devices can't overwrite each other.
+async function sendMarks(add, remove) {
+  const id = book.id;
+  try {
+    const r = await api(`/api/books/${id}/marks`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ add, remove }),
+    });
+    if (book?.id === id) applyServerMarks(r.marks);
+  } catch (e) { toast(`Could not save marks: ${e.message}`); }
+}
+
+function applyServerMarks(serverMarks) {
+  const changed = new Set([...Object.keys(marks), ...Object.keys(serverMarks)]);
+  marks = serverMarks;
+  changed.forEach(i => refreshSentence(+i));
+  renderStage();
+  renderMarks();
+}
+
+// Coming back to a tab: pick up marks made on other devices meanwhile.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') { flushReading(true); return; }
+  if (!book) return;
+  const id = book.id;
+  api(`/api/books/${id}/state`).then(st => { if (book?.id === id) applyServerMarks(st.marks || {}); }).catch(() => {});
+});
+
+/* ================================================================ reading time */
+
+// Listening time accumulates while playing and is flushed to the server every 30 s,
+// on pause, on leaving the book and when the page is hidden. The day is the local date.
+let listenSince = null, listenAcc = 0, sentencesAcc = 0, finishedFlag = false;
+function localDay(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function trackListening(on) {
+  if (on && listenSince == null) listenSince = performance.now();
+  if (!on && listenSince != null) { listenAcc += (performance.now() - listenSince) / 1000; listenSince = null; }
+}
+function flushReading(beacon = false) {
+  if (!book) return;
+  if (listenSince != null) { trackListening(false); trackListening(true); }
+  if (listenAcc < 1 && !sentencesAcc && !finishedFlag) return;
+  const body = JSON.stringify({ book: book.id, day: localDay(), seconds: Math.round(listenAcc * 10) / 10, sentences: sentencesAcc, finished: finishedFlag });
+  listenAcc = 0; sentencesAcc = 0; finishedFlag = false;
+  if (beacon) navigator.sendBeacon('/api/read', new Blob([body], { type: 'application/json' }));
+  else fetch('/api/read', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }).then(checkAuth).catch(() => {});
+}
+setInterval(() => { if (playing) flushReading(); }, 30000);
 
 /* ================================================================ playback */
 
@@ -288,7 +339,8 @@ async function loop(id) {
         : `Speech failed: ${lastError}`, 7000);
       return;
     }
-    if (cur >= S.length - 1) { setPlaying(false); toast('End of book'); return; }
+    sentencesAcc++;
+    if (cur >= S.length - 1) { finishedFlag = true; setPlaying(false); toast('End of book'); return; }
     const next = cur + 1;
     const newPara = S[next].p !== S[cur].p;
     const gap = settings.gap + (newPara ? settings.paraGap : 0);
@@ -316,6 +368,8 @@ function halt() {
 
 function setPlaying(v) {
   playing = v;
+  trackListening(v);
+  if (!v) flushReading();
   document.body.classList.toggle('paused', !v);
   $('#btnPlay use').setAttribute('href', v ? '#i-pause' : '#i-play');
   $('#btnPlay').title = v ? 'Pause (Space)' : 'Play (Space)';
@@ -514,14 +568,15 @@ function clearSelection() {
 }
 
 function setMarks(indices, on) {
+  const add = {}, remove = [];
   for (const i of indices) {
-    if (on) marks[i] = { t: S[i].t, at: Date.now() };
-    else delete marks[i];
+    if (on && !(i in marks)) add[i] = marks[i] = { t: S[i].t, at: Date.now() };
+    else if (!on && i in marks) { delete marks[i]; remove.push(i); }
     refreshSentence(i);
   }
   renderStage();
   renderMarks();
-  saveSoon();
+  if (Object.keys(add).length || remove.length) sendMarks(add, remove);
 }
 
 /* ================================================================ outline pane */
@@ -649,13 +704,23 @@ async function copyText(text, what) {
 
 /* ================================================================ library */
 
+function showView(name) {
+  for (const v of ['library', 'reader', 'highlights', 'stats']) $('#' + v).hidden = v !== name;
+}
+
+function leaveBook() {
+  if (!book) return;
+  stopAll();
+  saveNow();
+  flushReading();
+  book = null;
+}
+
 async function showLibrary() {
   setCinema(false);
-  if (book) { stopAll(); saveNow(); }
-  book = null;
+  leaveBook();
   document.title = 'Book Watcher';
-  $('#reader').hidden = true;
-  $('#library').hidden = false;
+  showView('library');
   $('#settings').hidden = true;
   let books = [];
   try { books = await api('/api/books'); } catch (e) { toast(e.message); }
@@ -692,7 +757,7 @@ async function uploadFiles(files) {
 
 /* ================================================================ reader */
 
-async function openBook(id) {
+async function openBook(id, at) {
   let b, st;
   try { [b, st] = await Promise.all([api(`/api/books/${id}`), api(`/api/books/${id}/state`)]); }
   catch (e) { toast(e.message); location.hash = '#/'; return; }
@@ -709,18 +774,26 @@ async function openBook(id) {
   $('#progress').max = S.length - 1;
   buildOutline(b);
   $('#outlineFilter').value = '';
-  $('#library').hidden = true;
-  $('#reader').hidden = false;
-  setCur(clamp(st.pos || 0, 0, S.length - 1), { scroll: 'instant' });
+  showView('reader');
+  setCur(clamp(at ?? st.pos ?? 0, 0, S.length - 1), { scroll: 'instant' });
   renderMarks();
   updateSelBar();
   saveNow();
 }
 
 function route() {
-  const m = location.hash.match(/^#\/book\/([0-9a-f]{12})/);
-  if (m) { if (book?.id !== m[1]) { if (book) { stopAll(); saveNow(); } openBook(m[1]); } }
-  else showLibrary();
+  // #/book/<id> opens a book; #/book/<id>/<n> opens it at sentence n (links from Highlights)
+  const m = location.hash.match(/^#\/book\/([0-9a-f]{12})(?:\/(\d+))?/);
+  if (m) {
+    const at = m[2] != null ? +m[2] : undefined;
+    if (book?.id !== m[1]) { leaveBook(); setCinema(false); openBook(m[1], at); }
+    else if (at != null) jump(at);
+    if (at != null) history.replaceState(null, '', `#/book/${m[1]}`);
+    return;
+  }
+  if (location.hash === '#/highlights') { setCinema(false); leaveBook(); showHighlights(); return; }
+  if (location.hash === '#/stats') { setCinema(false); leaveBook(); showStats(); return; }
+  showLibrary();
 }
 
 /* ================================================================ events */
@@ -731,6 +804,7 @@ function bindRange(sel, key, parse = Number) {
 
 function init() {
   applySettings();
+  initPages();
   api('/api/config').then(c => { $('#signOut').hidden = !c.auth; }).catch(() => {});
   populateVoices();
 

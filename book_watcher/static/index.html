@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;700&family=Noto+Serif:wght@400;600&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v=__V__">
 </head>
 <body class="paused">
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -24,6 +24,8 @@
   <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="15" cy="7" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="9" cy="17" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
   <symbol id="i-back" viewBox="0 0 24 24"><path d="M4 6.5A1.5 1.5 0 0 1 5.5 5H10l2 2h6.5A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
   <symbol id="i-full" viewBox="0 0 24 24"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M5 19V11M12 19V5M19 19v-6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+  <symbol id="i-left" viewBox="0 0 24 24"><path d="M14.5 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
   <symbol id="i-vol" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" fill="currentColor"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
 </svg>
@@ -33,6 +35,10 @@
   <header class="lib-head">
     <h1>Book Watcher <a id="signOut" class="sign-out" href="/logout" hidden>Sign out</a></h1>
     <p>Books read aloud one sentence at a time, shown like subtitles. Mandarin and English voices.</p>
+    <nav class="lib-nav">
+      <a class="chip" href="#/highlights"><svg><use href="#i-mark"/></svg>Highlights</a>
+      <a class="chip" href="#/stats"><svg><use href="#i-chart"/></svg>Reading stats</a>
+    </nav>
   </header>
   <label id="dropzone" class="dropzone">
     <input id="fileInput" type="file" accept=".epub,application/epub+zip" multiple hidden>
@@ -40,6 +46,73 @@
     <span>or click to choose a file</span>
   </label>
   <div id="bookList" class="book-list"></div>
+</div>
+
+<!-- ============================ Highlights ========================= -->
+<div id="highlights" class="view page" hidden>
+  <header class="page-head">
+    <a class="icon-btn" href="#/" title="Library"><svg><use href="#i-left"/></svg></a>
+    <div>
+      <h1>Highlights</h1>
+      <p id="hlSummary" class="page-sub"></p>
+    </div>
+  </header>
+  <div class="toolbar">
+    <input type="search" id="hlSearch" placeholder="Search highlights…" aria-label="Search highlights" autocomplete="off">
+    <select id="hlBook" aria-label="Book"></select>
+    <select id="hlSort" aria-label="Sort">
+      <option value="book">In book order</option>
+      <option value="new">Newest first</option>
+    </select>
+    <div class="toolbar-end">
+      <button class="chip" id="hlExportMd">Export .md</button>
+      <button class="chip" id="hlExportCsv">Export .csv</button>
+      <button class="chip" id="hlCopy">Copy</button>
+    </div>
+  </div>
+  <div id="hlList" class="hl-list"></div>
+</div>
+
+<!-- ============================ Stats ============================== -->
+<div id="stats" class="view page" hidden>
+  <header class="page-head">
+    <a class="icon-btn" href="#/" title="Library"><svg><use href="#i-left"/></svg></a>
+    <div>
+      <h1>Reading stats</h1>
+      <p class="page-sub">Time spent listening, counted while a book is playing.</p>
+    </div>
+  </header>
+  <div class="period-bar">
+    <div class="segmented" role="tablist" aria-label="Period">
+      <button role="tab" data-period="week">Week</button>
+      <button role="tab" data-period="month">Month</button>
+      <button role="tab" data-period="year">Year</button>
+      <button role="tab" data-period="all">All time</button>
+    </div>
+    <div class="period-nav">
+      <button class="icon-btn sm" id="stPrev" title="Previous"><svg><use href="#i-left"/></svg></button>
+      <span id="stLabel" class="period-label"></span>
+      <button class="icon-btn sm" id="stNext" title="Next"><svg><use href="#i-next"/></svg></button>
+    </div>
+  </div>
+  <section class="hero">
+    <div class="hero-label">Listening time</div>
+    <div id="stTotal" class="hero-value"></div>
+    <div id="stSub" class="hero-sub"></div>
+  </section>
+  <section class="card chart-card">
+    <div id="stChart" class="chart"></div>
+    <div id="stTip" class="tip" role="status" hidden></div>
+    <details class="table-view">
+      <summary>Show as table</summary>
+      <div id="stTable"></div>
+    </details>
+  </section>
+  <section id="stTiles" class="tiles"></section>
+  <section class="card">
+    <h2 class="card-title">Books</h2>
+    <div id="stBooks" class="st-books"></div>
+  </section>
 </div>
 
 <!-- ============================ Reader ============================= -->
@@ -203,6 +276,7 @@
 </div>
 
 <div id="toast" class="toast" role="status" hidden></div>
-<script src="/static/app.js"></script>
+<script src="/static/pages.js?v=__V__"></script>
+<script src="/static/app.js?v=__V__"></script>
 </body>
 </html>

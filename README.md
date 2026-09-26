@@ -14,6 +14,12 @@ Then drop more EPUBs onto the library page.
 - **Play / pause** with the big button or <kbd>Space</kbd>. <kbd>←</kbd>/<kbd>→</kbd> sentence, <kbd>↑</kbd>/<kbd>↓</kbd> paragraph.
 - **Full screen** (<kbd>F</kbd>, or the ⛶ button): only the sentence being read, nothing else. <kbd>Space</kbd>
   (or a click) still pauses, and the sentence dims while paused. <kbd>Esc</kbd>, <kbd>F</kbd> or a double-click leaves.
+- **Highlights** page (from the library): every marked sentence across your books, grouped by book and
+  chapter or newest first, with search, "open in book", and export to Markdown or CSV (opens in Excel).
+- **Reading stats** page, in the spirit of WeChat Read (微信读书): listening time per week, month, year or
+  all time with a daily chart, daily average and change vs the previous period, days read, streaks,
+  books read and finished, highlights made, and time per book. Time counts while a book is playing.
+- Marks sync as individual changes, so reading on two devices at once never loses a mark.
 - **Speed, volume, font, size, theme, voices, pauses**: the sliders under the play button and the settings panel (<kbd>,</kbd>).
 - **Outline** tab (<kbd>O</kbd>): the book's table of contents as a foldable tree, with the section you're in
   highlighted and a filter box. Click any entry to jump there. If the EPUB's own TOC is sparse (only
