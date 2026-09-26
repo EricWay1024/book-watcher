@@ -2,6 +2,7 @@
 name = "book-watcher"
 version = "0.1.0"
 description = "Read an EPUB aloud in the browser, one subtitle-style sentence at a time (Mandarin + English)"
+license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
     "beautifulsoup4>=4.15.0",
