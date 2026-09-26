@@ -1,4 +1,11 @@
-"""Local web server: library of EPUBs, per-book reading state, and edge-tts speech."""
+"""Web server: per-user libraries of EPUBs, reading state, stats, and edge-tts speech.
+
+Layout under the data directory:
+  books/<book>/        book.epub + parsed book.json, shared by everyone who has the book
+  users/<uid>/         library.json (which books), state/<book>.json (position, marks), stats.json, settings.json
+  users.json, secret   accounts and the cookie-signing key
+  tts/                 speech cache, shared
+"""
 
 import argparse
 import asyncio
@@ -17,6 +24,7 @@ from aiohttp import web
 
 from .auth import Auth
 from .epub import PARSER_VERSION, parse_epub
+from .users import UserError, Users, new_password
 
 STATIC = Path(__file__).parent / "static"
 TTS_SLOTS = asyncio.Semaphore(6)  # concurrent requests to the speech service
@@ -24,41 +32,33 @@ _tts_locks: dict[str, asyncio.Lock] = {}
 _voices: list[dict] | None = None
 
 
-class Library:
+class Store:
+    """Everything shared: book files, the speech cache, and the users' directories."""
+
     def __init__(self, root: Path):
         self.root = root
         self.books = root / "books"
         self.tts = root / "tts"
-        self.books.mkdir(parents=True, exist_ok=True)
-        self.tts.mkdir(parents=True, exist_ok=True)
+        self.users_dir = root / "users"
+        for d in (self.books, self.tts, self.users_dir):
+            d.mkdir(parents=True, exist_ok=True)
 
-    def dir(self, book_id: str) -> Path:
-        if not re.fullmatch(r"[0-9a-f]{12}", book_id):
-            raise web.HTTPNotFound()
-        d = self.books / book_id
-        if not d.is_dir():
-            raise web.HTTPNotFound()
-        return d
-
-    def add(self, data: bytes, filename: str) -> str:
+    def add_file(self, data: bytes) -> str:
         book_id = hashlib.sha1(data).hexdigest()[:12]
         d = self.books / book_id
-        d.mkdir(exist_ok=True)
-        (d / "book.epub").write_bytes(data)
-        try:
-            self.book(book_id)
-        except Exception:
-            shutil.rmtree(d)
-            raise
-        meta = self._read(d / "meta.json", {})
-        meta.setdefault("filename", filename)
-        meta.setdefault("added", time.time())
-        (d / "meta.json").write_text(json.dumps(meta))
+        if not (d / "book.epub").exists():
+            d.mkdir(exist_ok=True)
+            (d / "book.epub").write_bytes(data)
+            try:
+                self.parsed(book_id)
+            except Exception:
+                shutil.rmtree(d)
+                raise
         return book_id
 
-    def book(self, book_id: str) -> dict:
+    def parsed(self, book_id: str) -> dict:
         d = self.books / book_id
-        cached = self._read(d / "book.json", None)
+        cached = _read(d / "book.json", None)
         if cached and cached.get("v") == PARSER_VERSION:
             return cached
         book = parse_epub(str(d / "book.epub"))
@@ -68,12 +68,95 @@ class Library:
         (d / "book.json").write_text(json.dumps(book, ensure_ascii=False))
         return book
 
+    def lib(self, uid: str) -> "Library":
+        return Library(self, uid)
+
+    def collect_garbage(self) -> None:
+        """Delete book files that no user has in their library any more."""
+        wanted = set()
+        for u in self.users_dir.iterdir():
+            wanted |= set(_read(u / "library.json", {}))
+        for d in self.books.iterdir():
+            if d.is_dir() and d.name not in wanted:
+                shutil.rmtree(d)
+
+    def migrate_legacy(self, uid: str) -> None:
+        """Before accounts, books/<id>/ held one person's state and stats sat at the top level.
+        Move all of that into this user's directory. Safe to re-run."""
+        u = self.users_dir / uid
+        (u / "state").mkdir(parents=True, exist_ok=True)
+        library = _read(u / "library.json", {})
+        for d in self.books.iterdir():
+            if not (d / "book.epub").exists():
+                continue
+            meta = _read(d / "meta.json", {})
+            library.setdefault(d.name, {"added": meta.get("added", time.time()), "filename": meta.get("filename", "")})
+            if (d / "state.json").exists() and not (u / "state" / f"{d.name}.json").exists():
+                (d / "state.json").replace(u / "state" / f"{d.name}.json")
+        _write(u / "library.json", library)
+        for name in ("stats.json", "settings.json"):
+            if (self.root / name).exists() and not (u / name).exists():
+                (self.root / name).replace(u / name)
+
+
+def _read(path: Path, default):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return default
+
+
+def _write(path: Path, data) -> None:
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False))
+    tmp.replace(path)
+
+
+class Library:
+    """One user's view: their books, positions, marks, reading stats and settings."""
+
+    def __init__(self, store: Store, uid: str):
+        self.store = store
+        self.uid = uid
+        self.root = store.users_dir / uid
+        (self.root / "state").mkdir(parents=True, exist_ok=True)
+
+    def entries(self) -> dict:
+        return _read(self.root / "library.json", {})
+
+    def dir(self, book_id: str) -> Path:
+        """The book's files, if it is in this user's library (anything else is a 404)."""
+        if not re.fullmatch(r"[0-9a-f]{12}", book_id) or book_id not in self.entries():
+            raise web.HTTPNotFound()
+        return self.store.books / book_id
+
+    def add(self, data: bytes, filename: str) -> str:
+        book_id = self.store.add_file(data)
+        library = self.entries()
+        library.setdefault(book_id, {"added": time.time(), "filename": filename})
+        _write(self.root / "library.json", library)
+        return book_id
+
+    def remove(self, book_id: str) -> None:
+        self.dir(book_id)
+        library = self.entries()
+        library.pop(book_id, None)
+        _write(self.root / "library.json", library)
+        (self.root / "state" / f"{book_id}.json").unlink(missing_ok=True)
+        self.store.collect_garbage()
+
+    def book(self, book_id: str) -> dict:
+        self.dir(book_id)
+        return self.store.parsed(book_id)
+
     def state(self, book_id: str) -> dict:
-        state = self._read(self.dir(book_id) / "state.json", {})
+        self.dir(book_id)
+        state = _read(self.root / "state" / f"{book_id}.json", {})
         return {"pos": 0, "marks": {}, **state}
 
     def save_state(self, book_id: str, state: dict) -> None:
-        self._write(self.dir(book_id) / "state.json", state)
+        self.dir(book_id)
+        _write(self.root / "state" / f"{book_id}.json", state)
 
     # State changes are read-modify-write with no await in between, so on the single event
     # loop they can't interleave: two devices editing marks never lose each other's changes.
@@ -100,7 +183,7 @@ class Library:
 
     # ---- reading time: stats.json = {"days": {"YYYY-MM-DD": {"s": secs, "n": sentences, "b": {book: secs}}}}
     def stats(self) -> dict:
-        return self._read(self.root / "stats.json", {"days": {}})
+        return _read(self.root / "stats.json", {"days": {}})
 
     def add_reading(self, book_id: str, day: str, seconds: float, sentences: int) -> None:
         stats = self.stats()
@@ -108,7 +191,14 @@ class Library:
         d["s"] = round(d["s"] + seconds, 1)
         d["n"] += sentences
         d["b"][book_id] = round(d["b"].get(book_id, 0) + seconds, 1)
-        self._write(self.root / "stats.json", stats)
+        _write(self.root / "stats.json", stats)
+
+    def settings(self) -> dict:
+        return _read(self.root / "settings.json", {})
+
+    def save_settings(self, body: dict) -> None:
+        if body.get("updated", 0) >= self.settings().get("updated", 0):  # newest change wins
+            _write(self.root / "settings.json", body)
 
     def chapter_titles(self, book: dict) -> list[str]:
         """Chapter title for every sentence index."""
@@ -137,38 +227,23 @@ class Library:
             out.append({"id": b["id"], "title": b["title"], "author": b["author"], "marks": items})
         return out
 
-    @staticmethod
-    def _write(path: Path, data) -> None:
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False))
-        tmp.replace(path)
-
     def list(self) -> list[dict]:
         out = []
-        for d in self.books.iterdir():
-            if not (d / "book.epub").exists():
-                continue
+        for book_id, entry in self.entries().items():
             try:
-                b = self.book(d.name)
+                b = self.book(book_id)
             except Exception:
                 continue
-            st, meta = self.state(d.name), self._read(d / "meta.json", {})
+            st = self.state(book_id)
             out.append({
-                "id": d.name, "title": b["title"], "author": b["author"], "sentences": b["sentences"],
+                "id": book_id, "title": b["title"], "author": b["author"], "sentences": b["sentences"],
                 "pos": st.get("pos", 0), "marks": len(st.get("marks", {})),
-                "opened": st.get("opened", meta.get("added", 0)), "finished": st.get("finished"),
+                "opened": st.get("opened", entry.get("added", 0)), "finished": st.get("finished"),
             })
         return sorted(out, key=lambda b: -b["opened"])
 
-    @staticmethod
-    def _read(path: Path, default):
-        try:
-            return json.loads(path.read_text())
-        except (OSError, ValueError):
-            return default
 
-
-async def synthesize(lib: Library, voice: str, text: str) -> Path | None:
+async def synthesize(lib: Store, voice: str, text: str) -> Path | None:
     key = hashlib.sha1(f"{voice}\n{text}".encode()).hexdigest()
     path = lib.tts / key[:2] / f"{key}.mp3"
     if path.exists():
@@ -216,13 +291,96 @@ async def prune_forever(root: Path, limit_mb: int) -> None:
         await asyncio.sleep(3600)
 
 
-def make_app(lib: Library, password: str = "", cache_mb: int = 0) -> web.Application:
+def make_app(store: Store, users: Users, cache_mb: int = 0) -> web.Application:
     routes = web.RouteTableDef()
-    auth = Auth(password, lib.root) if password else None
+    auth = Auth(users, store.root)
+    lib_of = lambda request: store.lib(request["uid"])  # noqa: E731
 
-    @routes.get("/api/config")
-    async def config(_):
-        return web.json_response({"auth": auth is not None})
+    def admin_only(request) -> None:
+        if not users.get(request["uid"]).get("admin"):
+            raise web.HTTPForbidden()
+
+    def user_error(e: Exception) -> web.Response:
+        return web.json_response({"error": str(e)}, status=400)
+
+    # ---- the signed-in user
+    @routes.get("/api/me")
+    async def me(request):
+        u = users.get(request["uid"])
+        return web.json_response({"id": request["uid"], "name": u["name"], "admin": bool(u.get("admin")),
+                                  "accounts": users.accounts_enabled})
+
+    @routes.post("/api/me/password")
+    async def change_password(request):
+        body = await request.json()
+        uid = request["uid"]
+        from .users import check_password
+        if not await asyncio.to_thread(check_password, str(body.get("current", "")), users.get(uid).get("hash")):
+            return web.json_response({"error": "Your current password is not right."}, status=400)
+        try:
+            await asyncio.to_thread(users.set_password, uid, str(body.get("password", "")))
+        except UserError as e:
+            return user_error(e)
+        resp = web.json_response({"ok": True})
+        auth.set_cookie(request, resp, uid)  # other devices are signed out; this one stays in
+        return resp
+
+    # ---- admin: accounts
+    def user_row(uid: str, u: dict) -> dict:
+        return {"id": uid, "name": u["name"], "admin": bool(u.get("admin")), "created": u.get("created"),
+                "seen": u.get("seen"), "books": len(store.lib(uid).entries())}
+
+    @routes.get("/api/admin/users")
+    async def list_users(request):
+        admin_only(request)
+        rows = [user_row(uid, u) for uid, u in users.all.items()]
+        return web.json_response(sorted(rows, key=lambda r: (not r["admin"], r["name"])))
+
+    @routes.post("/api/admin/users")
+    async def create_user(request):
+        admin_only(request)
+        body = await request.json()
+        password = str(body.get("password") or "") or new_password()
+        try:
+            uid = await asyncio.to_thread(users.create, str(body.get("name", "")), password)
+        except UserError as e:
+            return user_error(e)
+        store.lib(uid)
+        return web.json_response({**user_row(uid, users.get(uid)), "password": password})
+
+    @routes.patch("/api/admin/users/{uid}")
+    async def update_user(request):
+        admin_only(request)
+        uid = request.match_info["uid"]
+        if not users.get(uid):
+            raise web.HTTPNotFound()
+        body = await request.json()
+        out = {}
+        try:
+            if "name" in body:
+                users.rename(uid, str(body["name"]))
+            if body.get("reset_password"):
+                out["password"] = str(body.get("password") or "") or new_password()
+                await asyncio.to_thread(users.set_password, uid, out["password"])
+        except UserError as e:
+            return user_error(e)
+        resp = web.json_response({**user_row(uid, users.get(uid)), **out})
+        if uid == request["uid"] and "password" in out:
+            auth.set_cookie(request, resp, uid)
+        return resp
+
+    @routes.delete("/api/admin/users/{uid}")
+    async def delete_user(request):
+        admin_only(request)
+        uid = request.match_info["uid"]
+        if uid == request["uid"]:
+            return web.json_response({"error": "You can't delete your own account."}, status=400)
+        if not users.get(uid):
+            raise web.HTTPNotFound()
+        users.delete(uid)
+        shutil.rmtree(store.users_dir / uid, ignore_errors=True)
+        await asyncio.to_thread(store.collect_garbage)
+        return web.json_response({"ok": True})
 
     # Asset URLs carry a content hash, so a deploy can never leave a browser on stale JS.
     version = hashlib.sha1(b"".join(f.read_bytes() for f in sorted(STATIC.iterdir()) if f.is_file())).hexdigest()[:10]
@@ -241,32 +399,31 @@ def make_app(lib: Library, password: str = "", cache_mb: int = 0) -> web.Applica
         return web.Response(text=index_html, content_type="text/html", headers={"Cache-Control": "no-cache"})
 
     @routes.get("/api/books")
-    async def books(_):
-        return web.json_response(await asyncio.to_thread(lib.list))
+    async def books(request):
+        return web.json_response(await asyncio.to_thread(lib_of(request).list))
 
     @routes.post("/api/books")
     async def upload(request):
         data = await request.read()
         name = unquote(request.headers.get("X-Filename", "book.epub"))
         try:
-            book_id = await asyncio.to_thread(lib.add, data, name)
+            book_id = await asyncio.to_thread(lib_of(request).add, data, name)
         except Exception as e:
             return web.json_response({"error": f"Could not read {name}: {e}"}, status=400)
         return web.json_response({"id": book_id})
 
     @routes.get("/api/books/{id}")
     async def book(request):
-        lib.dir(request.match_info["id"])
-        return web.json_response(await asyncio.to_thread(lib.book, request.match_info["id"]))
+        return web.json_response(await asyncio.to_thread(lib_of(request).book, request.match_info["id"]))
 
     @routes.delete("/api/books/{id}")
     async def delete(request):
-        shutil.rmtree(lib.dir(request.match_info["id"]))
+        await asyncio.to_thread(lib_of(request).remove, request.match_info["id"])
         return web.json_response({"ok": True})
 
     @routes.get("/api/books/{id}/state")
     async def get_state(request):
-        return web.json_response(lib.state(request.match_info["id"]))
+        return web.json_response(lib_of(request).state(request.match_info["id"]))
 
     @routes.put("/api/books/{id}/state")
     @routes.post("/api/books/{id}/state")  # navigator.sendBeacon on page close
@@ -274,19 +431,20 @@ def make_app(lib: Library, password: str = "", cache_mb: int = 0) -> web.Applica
         # Position only. Marks go through /marks as changes, so a stale tab can't overwrite them
         # (older pages still send "marks" here; it is ignored).
         body = json.loads(await request.text())
-        lib.set_pos(request.match_info["id"], body.get("pos", 0))
+        lib_of(request).set_pos(request.match_info["id"], body.get("pos", 0))
         return web.json_response({"ok": True})
 
     @routes.post("/api/books/{id}/marks")
     async def marks(request):
         body = await request.json()
-        marks = lib.edit_marks(request.match_info["id"], body.get("add") or {}, body.get("remove") or [])
+        marks = lib_of(request).edit_marks(request.match_info["id"], body.get("add") or {}, body.get("remove") or [])
         return web.json_response({"marks": marks})
 
     @routes.post("/api/read")
     async def read(request):
         body = json.loads(await request.text())  # also sent by sendBeacon
         book_id, day = str(body.get("book", "")), str(body.get("day", ""))
+        lib = lib_of(request)
         lib.dir(book_id)
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
             return web.json_response({"error": "bad day"}, status=400)
@@ -299,8 +457,8 @@ def make_app(lib: Library, password: str = "", cache_mb: int = 0) -> web.Applica
         return web.json_response({"ok": True})
 
     @routes.get("/api/settings")
-    async def get_settings(_):
-        return web.json_response(lib._read(lib.root / "settings.json", {}))
+    async def get_settings(request):
+        return web.json_response(lib_of(request).settings())
 
     @routes.put("/api/settings")
     @routes.post("/api/settings")  # sendBeacon when the page is hidden
@@ -309,21 +467,20 @@ def make_app(lib: Library, password: str = "", cache_mb: int = 0) -> web.Applica
         body = json.loads(text)
         if not isinstance(body, dict) or len(text) > 20000:
             return web.json_response({"error": "bad settings"}, status=400)
-        current = lib._read(lib.root / "settings.json", {})
-        if body.get("updated", 0) >= current.get("updated", 0):  # newest change wins
-            lib._write(lib.root / "settings.json", body)
+        lib_of(request).save_settings(body)
         return web.json_response({"ok": True})
 
     @routes.get("/api/stats")
-    async def stats(_):
+    async def stats(request):
+        lib = lib_of(request)
         books = await asyncio.to_thread(lib.list)
         for b in books:
             b["markTimes"] = [m.get("at", 0) for m in lib.state(b["id"])["marks"].values()]
         return web.json_response({"days": lib.stats()["days"], "books": books})
 
     @routes.get("/api/highlights")
-    async def highlights(_):
-        return web.json_response(await asyncio.to_thread(lib.highlights))
+    async def highlights(request):
+        return web.json_response(await asyncio.to_thread(lib_of(request).highlights))
 
     @routes.get("/api/voices")
     async def voices(_):
@@ -344,7 +501,7 @@ def make_app(lib: Library, password: str = "", cache_mb: int = 0) -> web.Applica
         if not re.fullmatch(r"[a-z]{2,3}-[A-Za-z]{2,4}(-[a-z]+)?-\w+Neural", voice) or not text:
             return web.json_response({"error": "bad voice or text"}, status=400)
         try:
-            path = await synthesize(lib, voice, text[:1000])
+            path = await synthesize(store, voice, text[:1000])
         except Exception as e:
             return web.json_response({"error": f"speech service failed: {e}"}, status=502)
         if path is None:
@@ -352,15 +509,36 @@ def make_app(lib: Library, password: str = "", cache_mb: int = 0) -> web.Applica
         return web.FileResponse(path, headers={"Content-Type": "audio/mpeg", "Cache-Control": "max-age=31536000"})
 
     routes.static("/static", STATIC)
-    app = web.Application(client_max_size=100 * 1024 * 1024, middlewares=[auth.middleware] if auth else [])
+    app = web.Application(client_max_size=100 * 1024 * 1024, middlewares=[auth.middleware])
     app.add_routes(routes)
-    if auth:
-        app.add_routes(auth.routes())
+    app.add_routes(auth.routes())
     if cache_mb:
         async def start_pruner(app):
-            app["pruner"] = asyncio.create_task(prune_forever(lib.tts, cache_mb))
+            app["pruner"] = asyncio.create_task(prune_forever(store.tts, cache_mb))
         app.on_startup.append(start_pruner)
     return app
+
+
+def bootstrap(store: Store, password: str, admin_name: str) -> Users:
+    """First start: create the first user and give them the existing library.
+
+    With BW_PASSWORD set that user is an admin who signs in with it (BW_ADMIN names them, "admin" by
+    default); otherwise it is a sign-in-free local user. Afterwards users.json is the source of truth
+    and BW_PASSWORD is ignored (except to turn an existing local user into a real account)."""
+    users = Users(store.root)
+    if not users.all:
+        uid = users.create(admin_name if password else "local", password or None, admin=True)
+        print(f"created {'admin account ' + repr(admin_name) if password else 'local user'}", flush=True)
+    elif password and not users.accounts_enabled:
+        uid = next(iter(users.all))
+        users.rename(uid, admin_name)
+        users.set_password(uid, password)
+    if not users.data.get("migrated"):
+        admin = next(uid for uid, u in users.all.items() if u.get("admin"))
+        store.migrate_legacy(admin)
+        users.data["migrated"] = True
+        users.save()
+    return users
 
 
 def main() -> None:
@@ -377,7 +555,9 @@ def main() -> None:
     password = env("BW_PASSWORD", "")
     cache_mb = int(env("BW_TTS_CACHE_MB", 0))
 
-    lib = Library(args.data)
+    store = Store(args.data)
+    users = bootstrap(store, password, env("BW_ADMIN", "admin"))
+    lib = store.lib(next(uid for uid, u in users.all.items() if u.get("admin")))
     opened = None
     for f in args.epub:
         p = Path(f)
@@ -385,13 +565,13 @@ def main() -> None:
         print(f"added {p.name}")
 
     url = f"http://{args.host}:{args.port}/" + (f"#/book/{opened}" if opened else "")
-    print(f"Book Watcher on {url}" + (" (password required)" if password else ""), flush=True)
+    print(f"Book Watcher on {url}" + (" (sign-in required)" if users.accounts_enabled else ""), flush=True)
     if not args.no_browser:
         try:
             webbrowser.open(url)
         except Exception:
             pass
-    web.run_app(make_app(lib, password, cache_mb), host=args.host, port=args.port, print=None)
+    web.run_app(make_app(store, users, cache_mb), host=args.host, port=args.port, print=None)
 
 
 if __name__ == "__main__":

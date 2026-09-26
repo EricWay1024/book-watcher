@@ -372,6 +372,50 @@ function renderChart(values, R) {
   });
 }
 
+/* ================================================================ account */
+
+async function showAccount() {
+  document.title = 'Account · Book Watcher';
+  showView('account');
+  if (!ME) ME = await api('/api/me').catch(() => null);
+  if (!ME) return;
+  $('#acSub').textContent = `Signed in as ${ME.name}${ME.admin ? ' (admin)' : ''}`;
+  $('#adminSection').hidden = !ME.admin;
+  $('#acNotice').hidden = true;
+  if (ME.admin) renderUsers();
+}
+
+function acNotice(html, error = false) {
+  const n = $('#acNotice');
+  n.innerHTML = html;
+  n.classList.toggle('error', error);
+  n.hidden = false;
+}
+
+function passwordNotice(name, password, what) {
+  acNotice(`${what} <b>${esc(name)}</b>’s password is <code>${esc(password)}</code>
+    <button class="chip" data-copy="${esc(password)}">Copy</button><br>
+    <span class="form-note">Share it with them privately. They can change it on their Account page. It won’t be shown again.</span>`);
+}
+
+async function renderUsers() {
+  let rows;
+  try { rows = await api('/api/admin/users'); } catch (e) { acNotice(esc(e.message), true); return; }
+  const when = ms => (ms ? fmtDate(ms) : '—');
+  $('#usersBody').innerHTML = rows.map(u => `<tr data-uid="${u.id}" data-name="${esc(u.name)}">
+    <td>${esc(u.name)}${u.admin ? '<span class="badge">admin</span>' : ''}${u.id === ME.id ? '<span class="badge">you</span>' : ''}</td>
+    <td class="num">${u.books}</td><td>${when(u.created)}</td><td>${when(u.seen)}</td>
+    <td><div class="actions">
+      <button class="chip" data-act="rename">Rename</button>
+      <button class="chip" data-act="reset">Reset password</button>
+      ${u.id === ME.id ? '' : '<button class="chip" data-act="delete">Delete</button>'}
+    </div></td></tr>`).join('');
+}
+
+async function adminCall(path, method, body) {
+  return api(path, { method, headers: { 'Content-Type': 'application/json' }, body: body && JSON.stringify(body) });
+}
+
 /* ================================================================ wiring (called from app.js init) */
 
 function initPages() {
@@ -394,6 +438,52 @@ function initPages() {
       HL = HL.filter(x => x.marks.length);
       renderHighlights();
     } catch (err) { toast(err.message); }
+  });
+
+  $('#pwForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = e.target;
+    if (f.password.value !== f.repeat.value) { toast('The new passwords don’t match'); return; }
+    try {
+      await adminCall('/api/me/password', 'POST', { current: f.current.value, password: f.password.value });
+      f.reset();
+      toast('Password changed');
+    } catch (err) { toast(err.message); }
+  });
+  $('#newUserForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = e.target;
+    try {
+      const u = await adminCall('/api/admin/users', 'POST', { name: f.name.value, password: f.password.value });
+      f.reset();
+      passwordNotice(u.name, u.password, 'Created.');
+      renderUsers();
+    } catch (err) { acNotice(esc(err.message), true); }
+  });
+  $('#account').addEventListener('click', async e => {
+    const copy = e.target.closest('[data-copy]');
+    if (copy) { copyText(copy.dataset.copy, 'password'); return; }
+    const btn = e.target.closest('[data-act]');
+    if (!btn) return;
+    const row = btn.closest('tr'), uid = row.dataset.uid, name = row.dataset.name;
+    try {
+      if (btn.dataset.act === 'rename') {
+        const next = prompt(`New username for ${name}:`, name);
+        if (!next || next === name) return;
+        const u = await adminCall(`/api/admin/users/${uid}`, 'PATCH', { name: next });
+        if (uid === ME.id) { ME.name = u.name; $('#userName').textContent = u.name; showAccount(); }
+        acNotice(`Renamed to <b>${esc(u.name)}</b>. They sign in with the new name from now on.`);
+      } else if (btn.dataset.act === 'reset') {
+        if (!confirm(`Reset ${name}’s password? They will be signed out everywhere.`)) return;
+        const u = await adminCall(`/api/admin/users/${uid}`, 'PATCH', { reset_password: true });
+        passwordNotice(u.name, u.password, 'Password reset.');
+      } else if (btn.dataset.act === 'delete') {
+        if (!confirm(`Delete ${name} and their whole library, marks and stats? This can’t be undone.`)) return;
+        await adminCall(`/api/admin/users/${uid}`, 'DELETE');
+        acNotice(`Deleted <b>${esc(name)}</b>.`);
+      }
+      renderUsers();
+    } catch (err) { acNotice(esc(err.message), true); }
   });
 
   $$('.segmented button').forEach(b => b.addEventListener('click', () => {

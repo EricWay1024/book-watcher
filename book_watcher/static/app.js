@@ -74,11 +74,14 @@ function pushSettings(beacon = false) {
 }
 
 async function pullSettings() {
-  if (syncTimer) return; // a local change is about to be pushed; it is the newest
+  if (syncTimer || !ME) return; // a local change is about to be pushed; it is the newest
   let remote;
   try { remote = await api('/api/settings'); } catch { return; }
-  const localUpdated = store.get('settingsUpdated', 0);
-  const customised = SYNCED.some(k => settings[k] !== DEFAULTS[k]);
+  // Settings saved in this browser by a different account are not this user's: never push them.
+  const sameUser = store.get('settingsUser', null) === ME.id;
+  store.set('settingsUser', ME.id);
+  const localUpdated = sameUser ? store.get('settingsUpdated', 0) : 0;
+  const customised = sameUser && SYNCED.some(k => settings[k] !== DEFAULTS[k]);
   if (!remote.updated) { if (localUpdated || customised) pushSettings(); return; } // first device to sync seeds it
   if (remote.updated <= localUpdated) { if (remote.updated < localUpdated) pushSettings(); return; }
   const engineBefore = settings.engine;
@@ -759,7 +762,7 @@ async function copyText(text, what) {
 /* ================================================================ library */
 
 function showView(name) {
-  for (const v of ['library', 'reader', 'highlights', 'stats']) $('#' + v).hidden = v !== name;
+  for (const v of ['library', 'reader', 'highlights', 'stats', 'account']) $('#' + v).hidden = v !== name;
 }
 
 function leaveBook() {
@@ -847,6 +850,7 @@ function route() {
   }
   if (location.hash === '#/highlights') { setCinema(false); leaveBook(); showHighlights(); return; }
   if (location.hash === '#/stats') { setCinema(false); leaveBook(); showStats(); return; }
+  if (location.hash === '#/account') { setCinema(false); leaveBook(); showAccount(); return; }
   showLibrary();
 }
 
@@ -871,12 +875,18 @@ function initPwa() {
   });
 }
 
+let ME = null; // {id, name, admin, accounts}
+
 function init() {
   applySettings();
   initPages();
   initPwa();
-  pullSettings();
-  api('/api/config').then(c => { $('#signOut').hidden = !c.auth; }).catch(() => {});
+  api('/api/me').then(me => {
+    ME = me;
+    $('#userBar').hidden = !me.accounts;
+    $('#userName').textContent = me.name;
+    pullSettings();
+  }).catch(() => {});
   populateVoices();
 
   // library

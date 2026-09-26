@@ -1,4 +1,7 @@
-"""Single shared password -> signed session cookie. Off unless a password is configured."""
+"""Sign-in: username + password -> signed session cookie naming the user.
+
+Without accounts (a local run, no password configured) every request is the single local user.
+"""
 
 import asyncio
 import hashlib
@@ -10,37 +13,50 @@ from pathlib import Path
 
 from aiohttp import web
 
+from .users import Users, check_password
+
 COOKIE = "bw_session"
 SESSION_DAYS = 180
 OPEN_PATHS = {"/login", "/logout", "/favicon.ico", "/manifest.webmanifest", "/sw.js"}
 OPEN_PREFIXES = ("/static/icons/",)  # the manifest's icons are fetched without cookies
 MAX_FAILS, FAIL_WINDOW = 8, 600  # per client address
+_DUMMY_HASH = None  # compared against when the username doesn't exist, so timing doesn't reveal it
 
 
 class Auth:
-    def __init__(self, password: str, data_dir: Path):
-        self.password = password
+    def __init__(self, users: Users, data_dir: Path):
+        self.users = users
         secret_file = data_dir / "secret"
         if not secret_file.exists():
             secret_file.write_text(secrets.token_hex(32))
             secret_file.chmod(0o600)
-        # Keyed on the password too, so changing it signs everyone out.
-        self.key = hashlib.sha256(secret_file.read_text().encode() + b"\0" + password.encode()).digest()
+        self.secret = secret_file.read_text().encode()
         self.fails: dict[str, list[float]] = {}
 
-    def _sign(self, expiry: int) -> str:
-        return hmac.new(self.key, str(expiry).encode(), hashlib.sha256).hexdigest()
+    # A session is "uid.expiry.sig"; the signature covers the user's password hash, so changing
+    # (or resetting) a password signs that user out everywhere, and deleting a user ends it too.
+    def _sign(self, uid: str, expiry: int) -> str:
+        user = self.users.get(uid) or {}
+        msg = f"{uid}.{expiry}.{(user.get('hash') or '')[-24:]}".encode()
+        return hmac.new(self.secret, msg, hashlib.sha256).hexdigest()
 
-    def token(self) -> str:
+    def token(self, uid: str) -> str:
         expiry = int(time.time()) + SESSION_DAYS * 86400
-        return f"{expiry}.{self._sign(expiry)}"
+        return f"{uid}.{expiry}.{self._sign(uid, expiry)}"
 
-    def valid(self, token: str | None) -> bool:
+    def session_user(self, token: str | None) -> str | None:
         try:
-            expiry, sig = token.split(".", 1)
-            return int(expiry) > time.time() and hmac.compare_digest(sig, self._sign(int(expiry)))
+            uid, expiry, sig = token.split(".")
         except (AttributeError, ValueError):
-            return False
+            return None
+        if not self.users.get(uid) or not expiry.isdigit() or int(expiry) < time.time():
+            return None
+        return uid if hmac.compare_digest(sig, self._sign(uid, int(expiry))) else None
+
+    def set_cookie(self, request: web.Request, resp: web.StreamResponse, uid: str) -> None:
+        secure = request.secure or request.headers.get("X-Forwarded-Proto") == "https"
+        resp.set_cookie(COOKIE, self.token(uid), max_age=SESSION_DAYS * 86400,
+                        httponly=True, secure=secure, samesite="Lax")
 
     def client(self, request: web.Request) -> str:
         # Behind nginx the peer is 127.0.0.1; X-Real-IP is set by our own proxy config.
@@ -53,7 +69,15 @@ class Auth:
 
     @web.middleware
     async def middleware(self, request: web.Request, handler):
-        if request.path in OPEN_PATHS or request.path.startswith(OPEN_PREFIXES) or self.valid(request.cookies.get(COOKIE)):
+        if not self.users.accounts_enabled:  # local run: the one local user, no sign-in
+            request["uid"] = next(iter(self.users.all))
+            return await handler(request)
+        uid = self.session_user(request.cookies.get(COOKIE))
+        if uid:
+            request["uid"] = uid
+            self.users.touch(uid)
+            return await handler(request)
+        if request.path in OPEN_PATHS or request.path.startswith(OPEN_PREFIXES):
             return await handler(request)
         if request.path.startswith("/api/"):
             return web.json_response({"error": "not signed in"}, status=401)
@@ -61,23 +85,30 @@ class Auth:
 
     def routes(self) -> list[web.RouteDef]:
         async def login_page(request):
+            if not self.users.accounts_enabled:
+                raise web.HTTPFound("/")
             return page()
 
         async def login(request):
+            global _DUMMY_HASH
             who = self.client(request)
             if self.locked_out(who):
                 return page("Too many attempts. Try again in a few minutes.", status=429)
             form = await request.post()
-            if hmac.compare_digest(str(form.get("password", "")).encode(), self.password.encode()):
+            name, password = str(form.get("username", "")), str(form.get("password", ""))
+            found = self.users.by_name(name)
+            if _DUMMY_HASH is None:
+                from .users import hash_password
+                _DUMMY_HASH = await asyncio.to_thread(hash_password, secrets.token_hex(8))
+            ok = await asyncio.to_thread(check_password, password, found[1].get("hash") if found else _DUMMY_HASH)
+            if found and ok:
                 self.fails.pop(who, None)
                 resp = web.HTTPFound("/")
-                secure = request.secure or request.headers.get("X-Forwarded-Proto") == "https"
-                resp.set_cookie(COOKIE, self.token(), max_age=SESSION_DAYS * 86400,
-                                httponly=True, secure=secure, samesite="Lax")
+                self.set_cookie(request, resp, found[0])
                 return resp
             self.fails[who].append(time.time())
             await asyncio.sleep(1)
-            return page("Wrong password.", status=401)
+            return page("Wrong username or password.", status=401, name=name)
 
         async def logout(request):
             resp = web.HTTPFound("/login")
@@ -87,11 +118,13 @@ class Auth:
         return [web.get("/login", login_page), web.post("/login", login), web.get("/logout", logout)]
 
 
-def page(error: str = "", status: int = 200) -> web.Response:
+def page(error: str = "", status: int = 200, name: str = "") -> web.Response:
     msg = f'<p class="err" role="alert">{html.escape(error)}</p>' if error else ""
     return web.Response(status=status, content_type="text/html", text=f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Book Watcher</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23f2b544'/><path d='M12 9l12 7-12 7z' fill='%23111'/></svg>">
 <style>
 :root {{ --bg:#0d0e11; --panel:#15171b; --line:#2a2e36; --text:#eeede8; --muted:#8d919a; --accent:#f2b544; --ink:#1a1405; --err:#ff8a7a; color-scheme: dark; }}
@@ -110,8 +143,9 @@ button {{ border:0; background:var(--accent); color:var(--ink); font-weight:600;
 </style></head><body>
 <form method="post" action="/login">
   <h1>Book Watcher</h1>
-  <p>Enter the password to continue.</p>
+  <p>Sign in to your library.</p>
   {msg}
-  <input type="password" name="password" autocomplete="current-password" aria-label="Password" placeholder="Password" required autofocus>
+  <input name="username" autocomplete="username" autocapitalize="none" spellcheck="false" aria-label="Username" placeholder="Username" value="{html.escape(name)}" required{'' if name else ' autofocus'}>
+  <input type="password" name="password" autocomplete="current-password" aria-label="Password" placeholder="Password" required{' autofocus' if name else ''}>
   <button type="submit">Sign in</button>
 </form></body></html>""")

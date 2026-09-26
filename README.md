@@ -45,15 +45,28 @@ Reading position and marks are saved per book in `data/books/<id>/state.json`.
 
 ## Running it online
 
-Set `BW_PASSWORD` to require a password (a login page; sessions last 180 days, and changing the
-password signs everyone out). Other settings: `BW_HOST`, `BW_PORT`, `BW_DATA`, and `BW_TTS_CACHE_MB`
-(prune the speech cache, least recently used first, to this size).
+### Accounts
+
+Run locally without a password and there is one user and no sign-in. Set `BW_PASSWORD` (and optionally
+`BW_ADMIN`, default `admin`) and the first start creates an **admin account** with that username and
+password, and gives it the existing library. From then on accounts live in `users.json`:
+
+- Sign in with username + password; sessions last 180 days. Changing or resetting a password signs that
+  person out everywhere.
+- The admin's **Account** page lists users and can create them (a password is generated if you leave it
+  blank), rename them, reset their password, or delete them with their data.
+- Everyone can change their own password there.
+- Each user has their own library, positions, marks, highlights, reading stats and synced settings.
+  Identical EPUBs are stored once and deleted when nobody has them any more.
+
+Other settings: `BW_HOST`, `BW_PORT`, `BW_DATA`, and `BW_TTS_CACHE_MB` (prune the speech cache, least
+recently used first, to this size).
 
 ### Deploying to a server
 
 `deploy/` has everything for a Debian-style box with nginx and certbot: a systemd unit (runs as its
 own system user, memory-capped), an nginx site, and `install.sh`, which sets them up and generates a
-password on first run.
+password for the admin account on first run.
 
 ```sh
 HOST=myserver DOMAIN=books.example.com ./deploy.sh   # or put HOST=/DOMAIN= in a git-ignored deploy.local
@@ -63,5 +76,6 @@ ssh myserver sudo certbot --nginx -d books.example.com   # once DNS points at th
 Re-running `./deploy.sh` updates the code and restarts; the library and password are left alone.
 
 - Service: `systemctl status book-watcher`; logs: `journalctl -u book-watcher`
-- Password: `/etc/book-watcher.env` (`BW_PASSWORD=…`); edit it, then `sudo systemctl restart book-watcher`
+- The first admin's password comes from `/etc/book-watcher.env` (`BW_PASSWORD=…`) on first start only;
+  after that, passwords are changed on the Account page
 - Library and speech cache: `/var/lib/book-watcher`

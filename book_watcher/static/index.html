@@ -41,7 +41,7 @@
 <!-- ============================ Library ============================ -->
 <div id="library" class="view">
   <header class="lib-head">
-    <h1>Book Watcher <a id="signOut" class="sign-out" href="/logout" hidden>Sign out</a></h1>
+    <h1>Book Watcher <span id="userBar" class="user-bar" hidden><span id="userName"></span> · <a href="#/account">Account</a> · <a href="/logout">Sign out</a></span></h1>
     <p>Books read aloud one sentence at a time, shown like subtitles. Mandarin and English voices.</p>
     <nav class="lib-nav">
       <a class="chip" href="#/highlights"><svg><use href="#i-mark"/></svg>Highlights</a>
@@ -80,6 +80,42 @@
     </div>
   </div>
   <div id="hlList" class="hl-list"></div>
+</div>
+
+<!-- ============================ Account ============================ -->
+<div id="account" class="view page" hidden>
+  <header class="page-head">
+    <a class="icon-btn" href="#/" title="Library"><svg><use href="#i-left"/></svg></a>
+    <div>
+      <h1>Account</h1>
+      <p id="acSub" class="page-sub"></p>
+    </div>
+  </header>
+
+  <section class="card">
+    <h2 class="card-title">Change password</h2>
+    <form id="pwForm" class="form-grid">
+      <label>Current password <input type="password" name="current" autocomplete="current-password" required></label>
+      <label>New password <input type="password" name="password" autocomplete="new-password" minlength="8" required></label>
+      <label>Repeat new password <input type="password" name="repeat" autocomplete="new-password" minlength="8" required></label>
+      <div class="form-actions"><button class="chip accent" type="submit">Change password</button>
+        <span class="form-note">This device stays signed in; your other devices will ask for the new password.</span></div>
+    </form>
+  </section>
+
+  <section id="adminSection" class="card" hidden>
+    <h2 class="card-title">Users</h2>
+    <form id="newUserForm" class="inline-form">
+      <input name="name" placeholder="New username" aria-label="New username" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+      <input name="password" placeholder="Password (blank: generate one)" aria-label="Password for the new user" autocomplete="new-password">
+      <button class="chip accent" type="submit">Create user</button>
+    </form>
+    <div id="acNotice" class="notice" role="status" hidden></div>
+    <div class="table-wrap"><table class="users-table">
+      <thead><tr><th>User</th><th>Books</th><th>Created</th><th>Last active</th><th><span class="sr-only">Actions</span></th></tr></thead>
+      <tbody id="usersBody"></tbody>
+    </table></div>
+  </section>
 </div>
 
 <!-- ============================ Stats ============================== -->
