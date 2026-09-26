@@ -88,7 +88,7 @@ function renderHighlights() {
     : '';
   $$('#highlights .toolbar-end .chip').forEach(b => (b.disabled = !shown));
   const list = $('#hlList');
-  if (!total) { list.innerHTML = '<p class="empty">No highlights yet. Press <kbd>M</kbd> while listening, or select sentences in the reader’s Context sidebar.</p>'; return; }
+  if (!total) { list.innerHTML = '<p class="empty">No highlights yet. Press <kbd>X</kbd> while listening, or select sentences in the reader’s Context sidebar.</p>'; return; }
   if (!shown) { list.innerHTML = '<p class="empty">No highlights match.</p>'; return; }
 
   if ($('#hlSort').value === 'new') {

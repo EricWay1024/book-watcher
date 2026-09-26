@@ -11,7 +11,8 @@ uv run book-watcher path/to/book.epub   # add a book and open it straight away
 
 Then drop more EPUBs onto the library page.
 
-- **Play / pause** with the big button or <kbd>Space</kbd>. <kbd>←</kbd>/<kbd>→</kbd> sentence, <kbd>↑</kbd>/<kbd>↓</kbd> paragraph.
+- **Play / pause** with the big button or <kbd>Space</kbd>. <kbd>←</kbd>/<kbd>→</kbd> or <kbd>A</kbd>/<kbd>D</kbd> sentence,
+  <kbd>↑</kbd>/<kbd>↓</kbd> or <kbd>W</kbd>/<kbd>S</kbd> paragraph.
 - **Full screen** (<kbd>F</kbd>, or the ⛶ button): only the sentence being read. Tap the left third of the
   screen for the previous sentence, the middle to pause/resume, the right third for the next one
   (the zones are invisible). <kbd>Space</kbd> also pauses. A faint
@@ -31,11 +32,11 @@ Then drop more EPUBs onto the library page.
 - **Outline** tab (<kbd>O</kbd>): the book's table of contents as a foldable tree, with the section you're in
   highlighted and a filter box. Click any entry to jump there. If the EPUB's own TOC is sparse (only
   "Part 1…5", say), chapter headings found in the text are slotted in underneath.
-- **Context sidebar** (<kbd>S</kbd> to fold): the paragraphs around the current sentence, following along as it plays.
+- **Context sidebar** (<kbd>B</kbd> to fold): the paragraphs around the current sentence, following along as it plays.
   Click sentences to select them (Shift+click for a range, or drag across the text), then **Mark**.
   Double-click a sentence to play from there.
 - **Marks** tab: every marked sentence by chapter. Click one to jump to it, or export them all as Markdown.
-  <kbd>M</kbd> marks the sentence being read.
+  <kbd>X</kbd> (or <kbd>M</kbd>) marks the sentence being read.
 
 Speech comes from Microsoft's online neural voices via [edge-tts](https://github.com/rany2/edge-tts)
 (free, needs internet). Clips are cached in `data/tts/`, so anything already heard replays offline.

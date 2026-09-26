@@ -522,7 +522,7 @@ function renderStage() {
   const cm = $('#cinemaMark');
   cm.classList.toggle('on', cur in marks);
   $('use', cm).setAttribute('href', cur in marks ? '#i-mark-on' : '#i-mark');
-  cm.title = cur in marks ? 'Unmark (M)' : 'Mark (M)';
+  cm.title = cur in marks ? 'Unmark (X)' : 'Mark (X)';
 }
 
 let scrubbing = false;
@@ -732,7 +732,7 @@ function renderMarks() {
   const passages = markPassages();
   $('#markCount').textContent = passages.length || '';
   if (!passages.length) {
-    $('#marksList').innerHTML = '<p class="empty">No marks yet. Press <kbd>M</kbd> while listening, or select sentences in Context.</p>';
+    $('#marksList').innerHTML = '<p class="empty">No marks yet. Press <kbd>X</kbd> while listening, or select sentences in Context.</p>';
     return;
   }
   let html = '', lastCh = -1;
@@ -1106,8 +1106,14 @@ function init() {
       'ArrowRight': () => jump(cur + 1),
       'ArrowUp': () => jumpPara(-1),
       'ArrowDown': () => jumpPara(1),
+      // WASD mirror the arrow keys
+      'a': () => jump(cur - 1),
+      'd': () => jump(cur + 1),
+      'w': () => jumpPara(-1),
+      's': () => jumpPara(1),
+      'x': () => setMarks([cur], !(cur in marks)),
       'm': () => setMarks([cur], !(cur in marks)),
-      's': () => $('#btnSidebar').click(),
+      'b': () => $('#btnSidebar').click(),
       'f': () => setCinema(!document.body.classList.contains('cinema')),
       'o': () => { if (!settings.sidebar) setSetting('sidebar', true); showTab('outline'); },
       ',': () => $('#btnSettings').click(),

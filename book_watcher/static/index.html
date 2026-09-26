@@ -170,7 +170,7 @@
     </div>
     <button class="icon-btn" id="btnFull" title="Full screen (F)"><svg><use href="#i-full"/></svg></button>
     <button class="icon-btn" id="btnSettings" title="Settings (,)"><svg><use href="#i-sliders"/></svg></button>
-    <button class="icon-btn" id="btnSidebar" title="Toggle sidebar (S)"><svg><use href="#i-side"/></svg></button>
+    <button class="icon-btn" id="btnSidebar" title="Toggle sidebar (B)"><svg><use href="#i-side"/></svg></button>
   </header>
 
   <div class="body">
@@ -179,21 +179,21 @@
         <div id="prevLine" class="prev-line"></div>
         <div id="subtitle" class="subtitle"></div>
         <div class="cinema-corner">
-          <button class="corner-btn" id="cinemaMark" title="Mark (M)" aria-label="Mark this sentence"><svg><use href="#i-mark"/></svg></button>
+          <button class="corner-btn" id="cinemaMark" title="Mark (X)" aria-label="Mark this sentence"><svg><use href="#i-mark"/></svg></button>
           <button class="corner-btn" id="cinemaExit" title="Exit full screen" aria-label="Exit full screen"><svg><use href="#i-exit"/></svg></button>
         </div>
       </div>
 
       <div class="deck">
         <div class="transport">
-          <button class="icon-btn lg" id="btnPrevPara" title="Previous paragraph (↑)"><svg><use href="#i-prevp"/></svg></button>
-          <button class="icon-btn lg" id="btnPrev" title="Previous sentence (←)"><svg><use href="#i-prev"/></svg></button>
+          <button class="icon-btn lg" id="btnPrevPara" title="Previous paragraph (↑ or W)"><svg><use href="#i-prevp"/></svg></button>
+          <button class="icon-btn lg" id="btnPrev" title="Previous sentence (← or A)"><svg><use href="#i-prev"/></svg></button>
           <button class="play" id="btnPlay" title="Play / pause (Space)"><svg><use href="#i-play"/></svg></button>
-          <button class="icon-btn lg" id="btnNext" title="Next sentence (→)"><svg><use href="#i-next"/></svg></button>
-          <button class="icon-btn lg" id="btnNextPara" title="Next paragraph (↓)"><svg><use href="#i-nextp"/></svg></button>
+          <button class="icon-btn lg" id="btnNext" title="Next sentence (→ or D)"><svg><use href="#i-next"/></svg></button>
+          <button class="icon-btn lg" id="btnNextPara" title="Next paragraph (↓ or S)"><svg><use href="#i-nextp"/></svg></button>
         </div>
         <div class="quick">
-          <button class="chip" id="btnMarkCur" title="Mark this sentence (M)"><svg><use href="#i-mark"/></svg><span>Mark</span></button>
+          <button class="chip" id="btnMarkCur" title="Mark this sentence (X)"><svg><use href="#i-mark"/></svg><span>Mark</span></button>
           <label class="quick-ctl" title="Speed ([ and ])">
             <span id="rateLabel" class="num">1.00×</span>
             <input type="range" id="rateQuick" min="0.5" max="3" step="0.05">
@@ -215,7 +215,7 @@
         <button role="tab" class="tab" data-tab="outline" aria-selected="false" title="Outline (O)">Outline</button>
         <button role="tab" class="tab" data-tab="context" aria-selected="true">Context</button>
         <button role="tab" class="tab" data-tab="marks" aria-selected="false">Marks <span id="markCount" class="count"></span></button>
-        <button class="icon-btn sm" id="btnFold" title="Fold sidebar (S)"><svg><use href="#i-x"/></svg></button>
+        <button class="icon-btn sm" id="btnFold" title="Fold sidebar (B)"><svg><use href="#i-x"/></svg></button>
       </div>
 
       <section id="pane-outline" class="pane" hidden>
@@ -325,7 +325,7 @@
       <button class="chip" id="testVoice">Test voices</button>
     </fieldset>
 
-    <p class="keys"><kbd>Space</kbd> play/pause · <kbd>←</kbd><kbd>→</kbd> sentence · <kbd>↑</kbd><kbd>↓</kbd> paragraph · <kbd>M</kbd> mark · <kbd>[</kbd><kbd>]</kbd> speed · <kbd>+</kbd><kbd>−</kbd> size · <kbd>S</kbd> sidebar · <kbd>O</kbd> outline · <kbd>F</kbd> full screen</p>
+    <p class="keys"><kbd>Space</kbd> play/pause · <kbd>←</kbd><kbd>→</kbd> or <kbd>A</kbd><kbd>D</kbd> sentence · <kbd>↑</kbd><kbd>↓</kbd> or <kbd>W</kbd><kbd>S</kbd> paragraph · <kbd>X</kbd> mark · <kbd>[</kbd><kbd>]</kbd> speed · <kbd>+</kbd><kbd>−</kbd> size · <kbd>B</kbd> sidebar · <kbd>O</kbd> outline · <kbd>F</kbd> full screen</p>
   </div>
 </div>
 
