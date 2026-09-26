@@ -34,7 +34,7 @@ function toast(msg, ms = 3500) {
 /* ================================================================ settings */
 
 const DEFAULTS = {
-  font: 'sans', size: 46, sideSize: 16, showPrev: true, theme: 'dark',
+  font: 'sans', size: 46, sideSize: 16, readSize: 20, showPrev: true, theme: 'dark',
   rate: 1, volume: 1, gap: 250, paraGap: 450,
   engine: 'edge', lang: 'auto',
   zhVoice: 'zh-CN-XiaoxiaoNeural', enVoice: 'en-US-AvaNeural', bZh: '', bEn: '',
@@ -49,7 +49,7 @@ const FONTS = {
 
 // Settings that follow you across devices (kept on the server). Sidebar layout and the browser
 // engine's voices stay per device: they depend on the screen and on what the device has installed.
-const SYNCED = ['font', 'size', 'sideSize', 'showPrev', 'theme', 'rate', 'volume', 'gap', 'paraGap', 'engine', 'lang', 'zhVoice', 'enVoice'];
+const SYNCED = ['font', 'size', 'sideSize', 'readSize', 'showPrev', 'theme', 'rate', 'volume', 'gap', 'paraGap', 'engine', 'lang', 'zhVoice', 'enVoice'];
 let syncTimer = null;
 
 function saveSettings(local = false) {
@@ -102,6 +102,7 @@ function applySettings() {
   root.style.setProperty('--font-sub-en', `var(${enFont})`);
   root.style.setProperty('--sub-size', settings.size + 'px');
   root.style.setProperty('--side-size', settings.sideSize + 'px');
+  root.style.setProperty('--read-size', settings.readSize + 'px');
   if (settings.font === 'kai' && !$('#kai-font')) {
     const l = document.createElement('link');
     l.id = 'kai-font';
@@ -117,6 +118,7 @@ function applySettings() {
   $('#setFont').value = settings.font;
   $('#setSize').value = settings.size; $('#sizeVal').textContent = settings.size + 'px';
   $('#setSideSize').value = settings.sideSize; $('#sideSizeVal').textContent = settings.sideSize + 'px';
+  $('#setReadSize').value = settings.readSize; $('#readSizeVal').textContent = settings.readSize + 'px';
   $('#setPrev').checked = settings.showPrev;
   $('#setTheme').value = settings.theme;
   for (const id of ['#setRate', '#rateQuick']) $(id).value = settings.rate;
@@ -287,7 +289,7 @@ function flushReading(beacon = false) {
   if (beacon) navigator.sendBeacon('/api/read', new Blob([body], { type: 'application/json' }));
   else fetch('/api/read', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }).then(checkAuth).catch(() => {});
 }
-setInterval(() => { if (playing) flushReading(); }, 30000);
+setInterval(() => { if (playing || mode === 'read') flushReading(); }, 30000);
 setInterval(() => { if (playing && book && !scrubbing) updateProgress(); }, 1000); // count down smoothly
 
 /* ================================================================ time left */
@@ -555,6 +557,7 @@ function jumpPara(dir) {
 function setCur(i, opts = {}) {
   cur = i;
   renderStage();
+  if (mode === 'read' && opts.scroll !== 'read') renderRead(cur);
   updateContext(opts.scroll);
   updateOutline();
   updateProgress();
@@ -671,6 +674,7 @@ function scrollToCurrent(behavior = 'smooth') {
 }
 
 function refreshSentence(i) {
+  $(`#readText [data-i="${i}"]`)?.classList.toggle('marked', i in marks);
   const el = $(`#context [data-i="${i}"]`);
   if (!el) return;
   el.classList.toggle('marked', i in marks);
@@ -831,6 +835,164 @@ async function copyText(text, what) {
   catch { toast('Clipboard not available'); }
 }
 
+/* ================================================================ read mode */
+
+// True if the range covers part of el's text, not merely touches its edge.
+function rangeCovers(range, el) {
+  const r = document.createRange();
+  r.selectNodeContents(el);
+  return range.compareBoundaryPoints(Range.START_TO_END, r) > 0 && range.compareBoundaryPoints(Range.END_TO_START, r) < 0;
+}
+
+// The same book as flowing text. Chapters are rendered on demand as you scroll; the sentence at
+// the top of the screen is the reading position, shared with Watch mode.
+let mode = store.get('mode', 'watch');
+let readLo = -1, readHi = -1;  // chapters currently rendered
+let readActive = 0;           // last scroll/touch/key in the reading view
+const READ_TOP = 72;          // px from the top of the view where the reading position sits
+let readQuietUntil = 0;       // programmatic scrolls don't move the reading position
+
+function chapterEnd(ch) { return ch + 1 < book.chapters.length ? chapterStartSentence(ch + 1) - 1 : S.length - 1; }
+
+function chapterHtml(ch) {
+  const c = book.chapters[ch];
+  const lastPara = ch + 1 < book.chapters.length ? book.chapters[ch + 1].p - 1 : P.length - 1;
+  let html = `<section data-ch="${ch}">`;
+  if (!P[c.p].h) html += `<h2 class="ch-title">${esc(c.title)}</h2>`; // books usually open a chapter with its own heading
+  for (let p = c.p; p <= lastPara; p++) {
+    let inner = '';
+    for (let i = P[p].start; i <= P[p].end; i++) {
+      const prevT = i > P[p].start ? S[i - 1].t : '';
+      const joinCjk = /[\u3000-\u9fff\uff00-\uffef]$/.test(prevT) || /^[\u3000-\u9fff\uff00-\uffef]/.test(S[i].t);
+      inner += (prevT && !joinCjk ? ' ' : '') + `<span class="s${i in marks ? ' marked' : ''}" data-i="${i}">${esc(S[i].t)}</span>`;
+    }
+    html += `<p class="${P[p].h ? 'h' : ''}" lang="${isZh(S[P[p].start].t) ? 'zh-CN' : 'en'}">${inner}</p>`;
+  }
+  return html + '</section>';
+}
+
+function renderRead(i) {
+  const view = $('#readView'), text = $('#readText');
+  const ch = chapterOf(i);
+  readLo = readHi = ch;
+  text.innerHTML = chapterHtml(ch);
+  fillRead();
+  const el = $(`#readText [data-i="${i}"]`);
+  if (el) {
+    readQuietUntil = Date.now() + 400;
+    view.scrollTop += el.getBoundingClientRect().top - view.getBoundingClientRect().top - READ_TOP;
+    // show where you are for a moment
+    el.classList.add('here');
+    setTimeout(() => el.classList.add('fade'), 900);
+    setTimeout(() => el.classList.remove('here', 'fade'), 2400);
+  }
+  updateReadStatus();
+}
+
+// Keep a screenful of text beyond both edges; prepending keeps the view still.
+function fillRead() {
+  const view = $('#readView'), text = $('#readText');
+  while (readHi < book.chapters.length - 1 && view.scrollHeight - view.scrollTop - view.clientHeight < 1500) {
+    text.insertAdjacentHTML('beforeend', chapterHtml(++readHi));
+  }
+  while (readLo > 0 && view.scrollTop < 1200) {
+    const before = view.scrollHeight;
+    text.insertAdjacentHTML('afterbegin', chapterHtml(--readLo));
+    view.scrollTop += view.scrollHeight - before;
+  }
+}
+
+function sentenceAtTop() {
+  const r = $('#readView').getBoundingClientRect();
+  for (let y = r.top + READ_TOP + 6; y < r.top + READ_TOP + 200; y += 14) {
+    for (const x of [r.left + r.width / 2, r.left + r.width * 0.3, r.left + r.width * 0.7]) {
+      const s = document.elementFromPoint(x, y)?.closest?.('#readText .s');
+      if (s) return +s.dataset.i;
+    }
+  }
+  return null;
+}
+
+function updateReadStatus() {
+  const c = book.chapters[chapterOf(cur)];
+  $('#readStatus').textContent = `${c.title} · ${(100 * cur / Math.max(1, S.length - 1)).toFixed(1)}%`;
+}
+
+let readScrollTimer = null;
+function onReadScroll() {
+  readActive = Date.now();
+  hideReadBar();
+  if (readScrollTimer) return;
+  readScrollTimer = setTimeout(() => {
+    readScrollTimer = null;
+    if (mode !== 'read' || !book) return;
+    fillRead();
+    if (Date.now() < readQuietUntil) return;
+    const i = sentenceAtTop();
+    if (i != null && i !== cur) { setCur(i, { scroll: 'read' }); updateReadStatus(); }
+  }, 200);
+}
+
+function setMode(m) {
+  mode = m === 'read' ? 'read' : 'watch';
+  store.set('mode', mode);
+  document.body.classList.toggle('mode-read', mode === 'read');
+  $$('.mode-switch button').forEach(b => b.setAttribute('aria-selected', b.dataset.mode === mode));
+  if (!book) return;
+  if (mode === 'read') {
+    stopAll();
+    renderRead(cur);
+    readActive = Date.now();
+    $('#readView').focus({ preventScroll: true }); // so Space / arrows scroll the text
+  } else {
+    hideReadBar();
+    renderStage();
+    updateProgress();
+  }
+}
+
+// Selecting text in the reading view offers Mark / Unmark / Copy / Listen from here.
+let readSel = [];
+function checkReadSelection() {
+  const sel = getSelection();
+  if (mode !== 'read' || !sel.rangeCount || sel.isCollapsed || !$('#readText').contains(sel.anchorNode)) { hideReadBar(); return; }
+  const range = sel.getRangeAt(0);
+  const hit = [];
+  for (const sec of $$('#readText section')) {
+    if (!range.intersectsNode(sec)) continue;
+    for (const s of $$('.s', sec)) if (rangeCovers(range, s)) hit.push(+s.dataset.i);
+  }
+  if (!hit.length) { hideReadBar(); return; }
+  readSel = hit;
+  const bar = $('#readBar');
+  bar.querySelector('[data-rb="mark"]').hidden = hit.every(i => i in marks);
+  bar.querySelector('[data-rb="unmark"]').hidden = !hit.some(i => i in marks);
+  bar.hidden = false;
+  const rect = range.getBoundingClientRect(), bw = bar.offsetWidth, bh = bar.offsetHeight;
+  const top = rect.top - bh - 10 > 64 ? rect.top - bh - 10 : rect.bottom + 10;
+  bar.style.top = `${Math.min(top, innerHeight - bh - 8)}px`;
+  bar.style.left = `${clamp(rect.left + rect.width / 2 - bw / 2, 8, innerWidth - bw - 8)}px`;
+}
+function hideReadBar() { $('#readBar').hidden = true; readSel = []; }
+
+function readBarAction(act) {
+  if (!readSel.length) return;
+  const ids = [...readSel];
+  if (act === 'mark') setMarks(ids, true);
+  if (act === 'unmark') setMarks(ids, false);
+  if (act === 'copy') copyText(ids.map(i => S[i].t).join(' '), 'selection');
+  getSelection().removeAllRanges();
+  hideReadBar();
+  if (act === 'listen') { setMode('watch'); jump(ids[0], true); }
+}
+
+// Active reading counts as reading time: page visible and touched/scrolled within the last minute.
+setInterval(() => {
+  if (mode === 'read' && book && !$('#reader').hidden && document.visibilityState === 'visible' && Date.now() - readActive < 60000) {
+    listenAcc += 5;
+  }
+}, 5000);
+
 /* ================================================================ library */
 
 function showView(name) {
@@ -906,6 +1068,7 @@ async function openBook(id, at) {
   $('#outlineFilter').value = '';
   showView('reader');
   setCur(clamp(at ?? st.pos ?? 0, 0, S.length - 1), { scroll: 'instant' });
+  setMode(mode);
   renderMarks();
   updateSelBar();
   saveNow();
@@ -991,6 +1154,14 @@ function init() {
   $('#btnMarkCur').addEventListener('click', () => setMarks([cur], !(cur in marks)));
   $('#btnLibrary').addEventListener('click', () => (location.hash = '#/'));
   $('#btnFull').addEventListener('click', () => setCinema(true));
+  $$('.mode-switch button').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
+  const rv = $('#readView');
+  rv.addEventListener('scroll', onReadScroll, { passive: true });
+  for (const ev of ['pointerdown', 'keydown', 'wheel', 'touchstart']) rv.addEventListener(ev, () => { readActive = Date.now(); }, { passive: true });
+  document.addEventListener('selectionchange', () => { clearTimeout(checkReadSelection.t); checkReadSelection.t = setTimeout(checkReadSelection, 250); });
+  $('#readBar').addEventListener('pointerdown', e => e.preventDefault()); // keep the text selection while clicking
+  $('#readBar').addEventListener('click', e => { const b = e.target.closest('[data-rb]'); if (b) readBarAction(b.dataset.rb); });
+  setMode(mode);
   // in full screen: click anywhere to play/pause, double-click to leave
   $('.screen').addEventListener('click', e => {
     if (!document.body.classList.contains('cinema') || e.target.closest('.corner-btn')) return;
@@ -1014,6 +1185,7 @@ function init() {
   bindRange('#setVol', 'volume');
   bindRange('#setSize', 'size');
   bindRange('#setSideSize', 'sideSize');
+  bindRange('#setReadSize', 'readSize');
   bindRange('#setGap', 'gap');
   bindRange('#setParaGap', 'paraGap');
   $('#setFont').addEventListener('change', e => setSetting('font', e.target.value));
@@ -1093,7 +1265,7 @@ function init() {
     const sel = getSelection();
     if (!sel.rangeCount || sel.isCollapsed) return;
     const range = sel.getRangeAt(0);
-    const hit = $$('.sent', ctx).filter(s => range.intersectsNode(s)).map(s => +s.dataset.i);
+    const hit = $$('.sent', ctx).filter(s => rangeCovers(range, s)).map(s => +s.dataset.i);
     if (!hit.length) return;
     hit.forEach(i => selected.add(i));
     hit.forEach(refreshSentence);
@@ -1172,6 +1344,23 @@ function init() {
     if (!book || $('#reader').hidden || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.target.closest('input:not([type=range]):not([type=checkbox]), select, textarea')) return;
     const k = e.key;
+    if (k.toLowerCase() === 'r' && !e.shiftKey) { e.preventDefault(); setMode(mode === 'read' ? 'watch' : 'read'); return; }
+    if (mode === 'read') {
+      // Space, arrows, Page Up/Down scroll the text natively; only a few app keys apply here.
+      const rk = {
+        'x': () => readBarAction('mark'),
+        'f': () => setCinema(!document.body.classList.contains('cinema')),
+        'b': () => $('#btnSidebar').click(),
+        'o': () => { if (!settings.sidebar) setSetting('sidebar', true); showTab('outline'); },
+        ',': () => $('#btnSettings').click(),
+        '=': () => setSetting('readSize', clamp(settings.readSize + 1, 14, 34)),
+        '+': () => setSetting('readSize', clamp(settings.readSize + 1, 14, 34)),
+        '-': () => setSetting('readSize', clamp(settings.readSize - 1, 14, 34)),
+        'Escape': () => { hideReadBar(); if (document.body.classList.contains('cinema')) setCinema(false); else $('#settings').hidden = true; },
+      }[k.length === 1 ? k.toLowerCase() : k];
+      if (rk) { e.preventDefault(); rk(); }
+      return;
+    }
     const handled = {
       ' ': toggle,
       'k': toggle,

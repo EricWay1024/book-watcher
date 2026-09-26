@@ -13,6 +13,10 @@ Then drop more EPUBs onto the library page.
 
 - **Play / pause** with the big button or <kbd>Space</kbd>. <kbd>←</kbd>/<kbd>→</kbd> or <kbd>A</kbd>/<kbd>D</kbd> sentence,
   <kbd>↑</kbd>/<kbd>↓</kbd> or <kbd>W</kbd>/<kbd>S</kbd> paragraph.
+- **Watch or Read** (switch in the top bar, or <kbd>R</kbd>): Read mode shows the book as ordinary
+  flowing text (its own text size, chapters load as you scroll). Both modes share one position: switch
+  and you continue from the same sentence. Select text to Mark, Copy, or *Listen from here*. Active
+  reading counts toward reading stats.
 - **Time left** under the progress bar: minutes left in the chapter and hours left in the book at your
   current speed, pauses included. The pace of each voice is learned from the clips you play.
 - **Full screen** (<kbd>F</kbd>, or the ⛶ button): only the sentence being read. Tap the left third of the

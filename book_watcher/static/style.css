@@ -30,6 +30,7 @@
   --font-sub-en: var(--font-sans-en);
   --sub-size: 46px;
   --side-size: 16px;
+  --read-size: 20px;
   --side-w: 400px;
   color-scheme: dark;
 }
@@ -490,6 +491,42 @@ kbd {
   background: var(--text); color: var(--bg); font-size: 14px; box-shadow: var(--shadow);
 }
 
+/* ---------------------------------------------------------- watch / read */
+.mode-switch { display: inline-flex; padding: 3px; border: 1px solid var(--line); border-radius: 10px; margin-right: 4px; }
+.mode-switch button {
+  display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px;
+  border: 0; border-radius: 7px; background: none; color: var(--muted); font-size: 13px;
+}
+.mode-switch svg { width: 15px; height: 15px; }
+.mode-switch button[aria-selected="true"] { background: var(--raised); color: var(--text); font-weight: 600; }
+body.mode-read .stage, body:not(.mode-read) .read-view { display: none; }
+
+.read-view { position: relative; flex: 1; min-width: 0; overflow-y: auto; overflow-anchor: none; background: var(--stage); outline: none; }
+.read-text {
+  max-width: 34em; margin: 0 auto; padding: 48px 24px 40vh;
+  font-family: var(--font-sub); font-size: var(--read-size); line-height: 1.9; color: var(--text);
+}
+.read-text p { margin: 0 0 .85em; }
+.read-text p:lang(zh-CN) { text-indent: 2em; text-align: justify; }
+.read-text p:lang(en) { font-family: var(--font-sub-en); line-height: 1.75; }
+.read-text p.h { text-indent: 0; text-align: center; font-weight: 700; font-size: 1.2em; margin: 2em 0 1.2em; line-height: 1.5; }
+.read-text section + section { margin-top: 4em; padding-top: 2em; border-top: 1px solid var(--line); }
+.read-text .ch-title { margin: 0 0 1.4em; text-align: center; font-size: 1.25em; font-weight: 700; line-height: 1.5; }
+.read-text .s.marked { background: var(--mark); box-shadow: inset 0 -2px 0 var(--mark-line); border-radius: 2px; }
+.read-text .s.here { background: var(--cur); box-shadow: inset 0 -2px 0 var(--cur-line); transition: background 1.2s, box-shadow 1.2s; }
+.read-text .s.here.fade { background: transparent; box-shadow: none; }
+.read-status {
+  position: sticky; bottom: 0; padding: 6px 16px 8px; text-align: center; pointer-events: none;
+  font-size: 12px; color: var(--faint); background: linear-gradient(transparent, var(--stage) 45%);
+}
+.read-bar {
+  position: fixed; z-index: 30; display: flex; gap: 6px; padding: 6px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: var(--shadow);
+}
+.read-bar .chip { height: 30px; }
+body.mode-read #cinemaMark { display: none; }
+body.cinema.mode-read .read-text { padding-top: 8vh; }
+
 /* ---------------------------------------------------------- full screen: the sentence and nothing else */
 .screen { position: relative; }
 body.cinema .topbar, body.cinema .deck, body.cinema .sidebar, body.cinema .settings,
@@ -523,6 +560,9 @@ body.cinema .subtitle { max-width: 26em; }
   .play { width: 72px; height: 72px; }
   .icon-btn.lg { width: 44px; height: 44px; }
   .quick-ctl input { width: 90px; }
+  .mode-switch span { display: none; }
+  .mode-switch button { padding: 0 8px; }
+  .read-text { padding: 28px 18px 40vh; }
 }
 @media (prefers-reduced-motion: reduce) {
   .play.loading { animation: none; }
