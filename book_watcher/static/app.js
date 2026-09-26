@@ -107,6 +107,9 @@ function applySettings() {
     document.head.append(l);
   }
   document.body.classList.toggle('side-folded', !settings.sidebar);
+  // browser/OS chrome (title bar, status bar) follows the theme
+  const bg = getComputedStyle(root).getPropertyValue('--bg').trim();
+  if (bg) $('meta[name="theme-color"]').content = bg;
 
   $('#setFont').value = settings.font;
   $('#setSize').value = settings.size; $('#sizeVal').textContent = settings.size + 'px';
@@ -716,31 +719,34 @@ function showTab(name) {
 
 /* ================================================================ marks pane */
 
-function renderMarks() {
+// This book's marks as passages (consecutive sentences merged, see mergeRuns in pages.js).
+function markPassages() {
   const idx = Object.keys(marks).map(Number).filter(i => i < S.length).sort((a, b) => a - b);
-  $('#markCount').textContent = idx.length || '';
-  if (!idx.length) {
+  return mergeRuns(idx.map(i => ({ i, t: S[i].t, ch: chapterOf(i), p: S[i].p, at: marks[i].at })));
+}
+
+function renderMarks() {
+  const passages = markPassages();
+  $('#markCount').textContent = passages.length || '';
+  if (!passages.length) {
     $('#marksList').innerHTML = '<p class="empty">No marks yet. Press <kbd>M</kbd> while listening, or select sentences in Context.</p>';
     return;
   }
   let html = '', lastCh = -1;
-  for (const i of idx) {
-    const ch = chapterOf(i);
-    if (ch !== lastCh) { html += `<h4>${esc(book.chapters[ch].title)}</h4>`; lastCh = ch; }
-    html += `<div class="mark-item" role="button" tabindex="0" data-i="${i}" lang="${isZh(S[i].t) ? 'zh-CN' : 'en'}">
-      <span class="t">${esc(S[i].t)}</span>
-      <button class="icon-btn sm" data-unmark="${i}" title="Remove mark"><svg><use href="#i-x"/></svg></button></div>`;
+  for (const m of passages) {
+    if (m.ch !== lastCh) { html += `<h4>${esc(book.chapters[m.ch].title)}</h4>`; lastCh = m.ch; }
+    html += `<div class="mark-item" role="button" tabindex="0" data-i="${m.i}" lang="${isZh(m.t) ? 'zh-CN' : 'en'}">
+      <span class="t">${esc(m.t)}</span>
+      <button class="icon-btn sm" data-unmark="${m.ids.join(',')}" title="Remove mark"><svg><use href="#i-x"/></svg></button></div>`;
   }
   $('#marksList').innerHTML = html;
 }
 
 function marksMarkdown() {
-  const idx = Object.keys(marks).map(Number).sort((a, b) => a - b);
   let md = `# ${book.title}${book.author ? ' — ' + book.author : ''}\n`, lastCh = -1;
-  for (const i of idx) {
-    const ch = chapterOf(i);
-    if (ch !== lastCh) { md += `\n## ${book.chapters[ch].title}\n\n`; lastCh = ch; }
-    md += `> ${S[i].t}\n\n`;
+  for (const m of markPassages()) {
+    if (m.ch !== lastCh) { md += `\n## ${book.chapters[m.ch].title}\n\n`; lastCh = m.ch; }
+    md += `${quoteMd(m.t)}\n\n`;
   }
   return md;
 }
@@ -850,9 +856,25 @@ function bindRange(sel, key, parse = Number) {
   $(sel).addEventListener('input', e => setSetting(key, parse(e.target.value)));
 }
 
+// Installable app: register the service worker; offer "Install app" where the browser allows it.
+let installPrompt = null;
+function initPwa() {
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+  addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; $('#btnInstall').hidden = false; });
+  addEventListener('appinstalled', () => { installPrompt = null; $('#btnInstall').hidden = true; });
+  $('#btnInstall').addEventListener('click', async () => {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    await installPrompt.userChoice;
+    installPrompt = null;
+    $('#btnInstall').hidden = true;
+  });
+}
+
 function init() {
   applySettings();
   initPages();
+  initPwa();
   pullSettings();
   api('/api/config').then(c => { $('#signOut').hidden = !c.auth; }).catch(() => {});
   populateVoices();
@@ -1045,7 +1067,7 @@ function init() {
 
   $('#marksList').addEventListener('click', e => {
     const un = e.target.closest('[data-unmark]');
-    if (un) { setMarks([+un.dataset.unmark], false); return; }
+    if (un) { setMarks(un.dataset.unmark.split(',').map(Number), false); return; }
     const item = e.target.closest('.mark-item');
     if (item) jump(+item.dataset.i);
   });

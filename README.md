@@ -16,10 +16,13 @@ Then drop more EPUBs onto the library page.
   screen for the previous sentence, the middle to pause/resume, the right third for the next one
   (the zones are invisible). <kbd>Space</kbd> also pauses. A faint
   bookmark in the corner marks the sentence. <kbd>Esc</kbd> or <kbd>F</kbd> leaves.
+- **Nine colour schemes**: Dark, Light, Sepia, Rose, Black (OLED), Night, Forest, High contrast, Terminal.
+- **Installable app (PWA)**: use the browser's Install / Add to Home Screen (or the "Install app" button in
+  the library) to get it as a standalone app with its own icon.
 - **Settings follow you across devices**: font, size, theme, speed, volume, pauses, engine and voices are
   kept on the server (newest change wins). Sidebar layout stays per device.
-- **Highlights** page (from the library): every marked sentence across your books, grouped by book and
-  chapter or newest first, with search, "open in book", and export to Markdown or CSV (opens in Excel).
+- **Highlights** page (from the library): every marked sentence across your books (consecutive marked
+  sentences merge into one passage), grouped by book and chapter or newest first, with search, "open in book", and export to Markdown or CSV (opens in Excel).
 - **Reading stats** page, in the spirit of WeChat Read (微信读书): listening time per week, month, year or
   all time with a daily chart, daily average and change vs the previous period, days read, streaks,
   books read and finished, highlights made, and time per book. Time counts while a book is playing.

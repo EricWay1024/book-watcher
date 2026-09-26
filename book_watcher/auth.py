@@ -12,7 +12,8 @@ from aiohttp import web
 
 COOKIE = "bw_session"
 SESSION_DAYS = 180
-OPEN_PATHS = {"/login", "/logout", "/favicon.ico"}
+OPEN_PATHS = {"/login", "/logout", "/favicon.ico", "/manifest.webmanifest", "/sw.js"}
+OPEN_PREFIXES = ("/static/icons/",)  # the manifest's icons are fetched without cookies
 MAX_FAILS, FAIL_WINDOW = 8, 600  # per client address
 
 
@@ -52,7 +53,7 @@ class Auth:
 
     @web.middleware
     async def middleware(self, request: web.Request, handler):
-        if request.path in OPEN_PATHS or self.valid(request.cookies.get(COOKIE)):
+        if request.path in OPEN_PATHS or request.path.startswith(OPEN_PREFIXES) or self.valid(request.cookies.get(COOKIE)):
             return await handler(request)
         if request.path.startswith("/api/"):
             return web.json_response({"error": "not signed in"}, status=401)

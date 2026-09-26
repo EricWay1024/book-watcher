@@ -125,10 +125,13 @@ class Library:
             marks = self.state(b["id"])["marks"]
             if not marks:
                 continue
-            chapters = self.chapter_titles(self.book(b["id"]))
+            book = self.book(b["id"])
+            chapters = self.chapter_titles(book)
+            para_of = [pi for pi, para in enumerate(book["paras"]) for _ in para["s"]]
             items = sorted(
                 ({"i": int(k), "t": v.get("t", ""), "at": v.get("at", 0),
-                  "ch": chapters[int(k)] if int(k) < len(chapters) else ""} for k, v in marks.items()),
+                  "ch": chapters[int(k)] if int(k) < len(chapters) else "",
+                  "p": para_of[int(k)] if int(k) < len(para_of) else -1} for k, v in marks.items()),
                 key=lambda m: m["i"],
             )
             out.append({"id": b["id"], "title": b["title"], "author": b["author"], "marks": items})
@@ -224,6 +227,14 @@ def make_app(lib: Library, password: str = "", cache_mb: int = 0) -> web.Applica
     # Asset URLs carry a content hash, so a deploy can never leave a browser on stale JS.
     version = hashlib.sha1(b"".join(f.read_bytes() for f in sorted(STATIC.iterdir()) if f.is_file())).hexdigest()[:10]
     index_html = (STATIC / "index.html").read_text().replace("__V__", version)
+
+    @routes.get("/manifest.webmanifest")
+    async def manifest(_):
+        return web.FileResponse(STATIC / "manifest.webmanifest", headers={"Content-Type": "application/manifest+json"})
+
+    @routes.get("/sw.js")  # served from the root so it can control the whole site
+    async def service_worker(_):
+        return web.FileResponse(STATIC / "sw.js", headers={"Content-Type": "text/javascript", "Cache-Control": "no-cache"})
 
     @routes.get("/")
     async def index(_):

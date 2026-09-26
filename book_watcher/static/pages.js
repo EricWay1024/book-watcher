@@ -19,6 +19,26 @@ function download(name, text, type) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+// Consecutive marked sentences (same chapter) read as one passage. Items are sorted by i;
+// each passage keeps every sentence index (ids) so it can be unmarked as a whole.
+const CJK_EDGE = /[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef\u3000-\u303f]/;
+const joinSentences = (a, b) => (CJK_EDGE.test(a.slice(-1)) || CJK_EDGE.test(b[0] || '') ? a + b : `${a} ${b}`);
+function mergeRuns(items) {
+  const out = [];
+  for (const m of items) {
+    const last = out.at(-1);
+    if (last && m.i === last.end + 1 && m.ch === last.ch) {
+      last.t = m.p === last.p ? joinSentences(last.t, m.t) : `${last.t}\n${m.t}`; // new paragraph: new line
+      last.end = m.i; last.p = m.p; last.ids.push(m.i);
+      last.at = Math.max(last.at || 0, m.at || 0);
+    } else {
+      out.push({ ...m, end: m.i, ids: [m.i] });
+    }
+  }
+  return out;
+}
+const quoteMd = t => `> ${t.replace(/\n/g, '\n>\n> ')}`;
+
 const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
 
 /* ================================================================ highlights */
@@ -30,6 +50,7 @@ async function showHighlights() {
   showView('highlights');
   $('#hlList').innerHTML = '';
   try { HL = await api('/api/highlights'); } catch (e) { toast(e.message); HL = []; }
+  for (const b of HL) b.marks = mergeRuns(b.marks);
   const sel = $('#hlBook'), prev = sel.value;
   sel.innerHTML = '<option value="">All books</option>' + HL.map(b => `<option value="${b.id}">${esc(b.title)}</option>`).join('');
   sel.value = HL.some(b => b.id === prev) ? prev : '';
@@ -53,7 +74,7 @@ function hlCard(b, m, q, withBook) {
   ].join('');
   return `<article class="hl" lang="${isZh(m.t) ? 'zh-CN' : 'en'}">
     <p class="t">${markMatch(m.t, q)}</p><div class="meta">${meta}</div>
-    <button class="icon-btn sm del" data-book="${b.id}" data-i="${m.i}" title="Remove highlight"><svg><use href="#i-x"/></svg></button>
+    <button class="icon-btn sm del" data-book="${b.id}" data-ids="${m.ids.join(',')}" title="Remove highlight"><svg><use href="#i-x"/></svg></button>
   </article>`;
 }
 
@@ -93,7 +114,7 @@ function highlightsMarkdown(books) {
     let ch = null;
     for (const m of b.marks) {
       if (m.ch !== ch) { ch = m.ch; if (ch) md += `\n### ${ch}\n`; }
-      md += `\n> ${m.t}\n`;
+      md += `\n${quoteMd(m.t)}\n`;
     }
   }
   return md;
@@ -103,7 +124,7 @@ function highlightsCsv(books) {
   const cell = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const rows = [['book', 'author', 'chapter', 'sentence', 'marked_at', 'text']];
   for (const b of books) for (const m of b.marks) {
-    rows.push([b.title, b.author, m.ch, m.i, m.at ? new Date(m.at).toISOString() : '', m.t]);
+    rows.push([b.title, b.author, m.ch, m.end > m.i ? `${m.i}-${m.end}` : m.i, m.at ? new Date(m.at).toISOString() : '', m.t]);
   }
   return '﻿' + rows.map(r => r.map(cell).join(',')).join('\r\n'); // BOM so Excel reads Chinese as UTF-8
 }
@@ -363,12 +384,13 @@ function initPages() {
   $('#hlList').addEventListener('click', async e => {
     const del = e.target.closest('.del');
     if (!del) return;
-    if (!confirm('Remove this highlight?')) return;
-    const { book: id, i } = del.dataset;
+    const ids = del.dataset.ids.split(',').map(Number);
+    if (!confirm(ids.length > 1 ? `Remove this passage (${ids.length} sentences)?` : 'Remove this highlight?')) return;
+    const id = del.dataset.book;
     try {
-      await api(`/api/books/${id}/marks`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ remove: [+i] }) });
+      await api(`/api/books/${id}/marks`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ remove: ids }) });
       const b = HL.find(x => x.id === id);
-      b.marks = b.marks.filter(m => m.i !== +i);
+      b.marks = b.marks.filter(m => m.i !== ids[0]);
       HL = HL.filter(x => x.marks.length);
       renderHighlights();
     } catch (err) { toast(err.message); }

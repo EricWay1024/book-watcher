@@ -4,6 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Book Watcher</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#0d0e11">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Book Watcher">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23f2b544'/><path d='M12 9l12 7-12 7z' fill='%23111'/></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -39,6 +46,7 @@
     <nav class="lib-nav">
       <a class="chip" href="#/highlights"><svg><use href="#i-mark"/></svg>Highlights</a>
       <a class="chip" href="#/stats"><svg><use href="#i-chart"/></svg>Reading stats</a>
+      <button class="chip" id="btnInstall" hidden>Install app</button>
     </nav>
   </header>
   <label id="dropzone" class="dropzone">
@@ -235,6 +243,12 @@
           <option value="dark">Dark</option>
           <option value="light">Light</option>
           <option value="sepia">Sepia</option>
+          <option value="rose">Rose</option>
+          <option value="black">Black (OLED)</option>
+          <option value="night">Night</option>
+          <option value="forest">Forest</option>
+          <option value="contrast">High contrast</option>
+          <option value="terminal">Terminal</option>
         </select>
       </label>
     </fieldset>
