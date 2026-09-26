@@ -430,8 +430,7 @@ body.cinema .cinema-corner { display: flex; gap: 2px; position: fixed; right: 10
 #cinemaExit { display: none; }
 body.no-fs #cinemaExit { display: grid; } /* only where real full screen is unavailable (iPhone) */
 body.cinema.idle, body.cinema.idle .screen { cursor: none; }
-body.cinema .subtitle { max-width: 26em; transition: opacity .25s; }
-body.cinema.paused .subtitle { opacity: .45; } /* the only pause indicator: the sentence dims */
+body.cinema .subtitle { max-width: 26em; }
 
 /* ---------------------------------------------------------- narrow screens */
 @media (max-width: 860px) {

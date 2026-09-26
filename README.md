@@ -14,7 +14,7 @@ Then drop more EPUBs onto the library page.
 - **Play / pause** with the big button or <kbd>Space</kbd>. <kbd>←</kbd>/<kbd>→</kbd> sentence, <kbd>↑</kbd>/<kbd>↓</kbd> paragraph.
 - **Full screen** (<kbd>F</kbd>, or the ⛶ button): only the sentence being read. Tap the left third of the
   screen for the previous sentence, the middle to pause/resume, the right third for the next one
-  (the zones are invisible). <kbd>Space</kbd> also pauses, and the sentence dims while paused. A faint
+  (the zones are invisible). <kbd>Space</kbd> also pauses. A faint
   bookmark in the corner marks the sentence. <kbd>Esc</kbd> or <kbd>F</kbd> leaves.
 - **Settings follow you across devices**: font, size, theme, speed, volume, pauses, engine and voices are
   kept on the server (newest change wins). Sidebar layout stays per device.
