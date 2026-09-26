@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Book Watcher</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23f2b544'/><path d='M12 9l12 7-12 7z' fill='%23111'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;700&family=Noto+Serif:wght@400;600&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="paused">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z" fill="currentColor"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="5" width="4.5" height="14" rx="1.2" fill="currentColor"/><rect x="13.5" y="5" width="4.5" height="14" rx="1.2" fill="currentColor"/></symbol>
+  <symbol id="i-prev" viewBox="0 0 24 24"><path d="M16 6l-7 6 7 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><path d="M8 6l7 6-7 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-prevp" viewBox="0 0 24 24"><path d="M18 6l-6 6 6 6M11 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-nextp" viewBox="0 0 24 24"><path d="M6 6l6 6-6 6M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-mark" viewBox="0 0 24 24"><path d="M7 4h10a1 1 0 0 1 1 1v15l-6-4-6 4V5a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/></symbol>
+  <symbol id="i-mark-on" viewBox="0 0 24 24"><path d="M7 4h10a1 1 0 0 1 1 1v15l-6-4-6 4V5a1 1 0 0 1 1-1z" fill="currentColor" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/></symbol>
+  <symbol id="i-side" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M14.5 4.5v15" stroke="currentColor" stroke-width="1.8"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="15" cy="7" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="9" cy="17" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M4 6.5A1.5 1.5 0 0 1 5.5 5H10l2 2h6.5A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  <symbol id="i-full" viewBox="0 0 24 24"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-vol" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" fill="currentColor"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+</svg>
+
+<!-- ============================ Library ============================ -->
+<div id="library" class="view">
+  <header class="lib-head">
+    <h1>Book Watcher <a id="signOut" class="sign-out" href="/logout" hidden>Sign out</a></h1>
+    <p>Books read aloud one sentence at a time, shown like subtitles. Mandarin and English voices.</p>
+  </header>
+  <label id="dropzone" class="dropzone">
+    <input id="fileInput" type="file" accept=".epub,application/epub+zip" multiple hidden>
+    <strong>Drop an EPUB here</strong>
+    <span>or click to choose a file</span>
+  </label>
+  <div id="bookList" class="book-list"></div>
+</div>
+
+<!-- ============================ Reader ============================= -->
+<div id="reader" class="view" hidden>
+  <header class="topbar">
+    <button class="icon-btn" id="btnLibrary" title="Library"><svg><use href="#i-back"/></svg></button>
+    <div class="titles">
+      <div id="bookTitle" class="book-title"></div>
+      <select id="chapterSelect" class="chapter-select" aria-label="Chapter"></select>
+    </div>
+    <button class="icon-btn" id="btnFull" title="Full screen (F)"><svg><use href="#i-full"/></svg></button>
+    <button class="icon-btn" id="btnSettings" title="Settings (,)"><svg><use href="#i-sliders"/></svg></button>
+    <button class="icon-btn" id="btnSidebar" title="Toggle sidebar (S)"><svg><use href="#i-side"/></svg></button>
+  </header>
+
+  <div class="body">
+    <main class="stage">
+      <div class="screen">
+        <div id="chapterLabel" class="chapter-label"></div>
+        <div id="prevLine" class="prev-line"></div>
+        <div id="subtitle" class="subtitle"></div>
+      </div>
+
+      <div class="deck">
+        <div class="transport">
+          <button class="icon-btn lg" id="btnPrevPara" title="Previous paragraph (↑)"><svg><use href="#i-prevp"/></svg></button>
+          <button class="icon-btn lg" id="btnPrev" title="Previous sentence (←)"><svg><use href="#i-prev"/></svg></button>
+          <button class="play" id="btnPlay" title="Play / pause (Space)"><svg><use href="#i-play"/></svg></button>
+          <button class="icon-btn lg" id="btnNext" title="Next sentence (→)"><svg><use href="#i-next"/></svg></button>
+          <button class="icon-btn lg" id="btnNextPara" title="Next paragraph (↓)"><svg><use href="#i-nextp"/></svg></button>
+        </div>
+        <div class="quick">
+          <button class="chip" id="btnMarkCur" title="Mark this sentence (M)"><svg><use href="#i-mark"/></svg><span>Mark</span></button>
+          <label class="quick-ctl" title="Speed ([ and ])">
+            <span id="rateLabel" class="num">1.00×</span>
+            <input type="range" id="rateQuick" min="0.5" max="3" step="0.05">
+          </label>
+          <label class="quick-ctl" title="Volume">
+            <svg class="ico"><use href="#i-vol"/></svg>
+            <input type="range" id="volQuick" min="0" max="1" step="0.01">
+          </label>
+        </div>
+        <div class="progress">
+          <input type="range" id="progress" min="0" max="0" value="0" aria-label="Position in book">
+          <div class="progress-text"><span id="progressLeft"></span><span id="progressRight" class="num"></span></div>
+        </div>
+      </div>
+    </main>
+
+    <aside id="sidebar" class="sidebar">
+      <div class="tabs" role="tablist">
+        <button role="tab" class="tab" data-tab="outline" aria-selected="false" title="Outline (O)">Outline</button>
+        <button role="tab" class="tab" data-tab="context" aria-selected="true">Context</button>
+        <button role="tab" class="tab" data-tab="marks" aria-selected="false">Marks <span id="markCount" class="count"></span></button>
+        <button class="icon-btn sm" id="btnFold" title="Fold sidebar (S)"><svg><use href="#i-x"/></svg></button>
+      </div>
+
+      <section id="pane-outline" class="pane" hidden>
+        <div class="outline-head">
+          <input type="search" id="outlineFilter" placeholder="Filter sections…" aria-label="Filter sections" autocomplete="off">
+          <button class="chip" id="outlineExpand">Expand all</button>
+        </div>
+        <div id="outline" class="outline" role="tree" aria-label="Table of contents"></div>
+      </section>
+
+      <section id="pane-context" class="pane">
+        <div id="context" class="context"></div>
+        <button id="btnFollow" class="follow" hidden>Back to current sentence</button>
+        <div id="selBar" class="selbar" hidden>
+          <span id="selCount"></span>
+          <button class="chip accent" id="selMark">Mark</button>
+          <button class="chip" id="selUnmark">Unmark</button>
+          <button class="chip" id="selPlay">Play from here</button>
+          <button class="chip" id="selCopy">Copy</button>
+          <button class="icon-btn sm" id="selClear" title="Clear selection (Esc)"><svg><use href="#i-x"/></svg></button>
+        </div>
+        <p class="hint">Click sentences to select them (Shift+click selects a range, or drag across text). Double-click plays from there.</p>
+      </section>
+
+      <section id="pane-marks" class="pane" hidden>
+        <div class="marks-head">
+          <button class="chip" id="exportMd">Export .md</button>
+          <button class="chip" id="copyMarks">Copy all</button>
+        </div>
+        <div id="marksList" class="marks-list"></div>
+      </section>
+    </aside>
+  </div>
+
+  <!-- settings -->
+  <div id="settings" class="settings" hidden>
+    <div class="settings-head">
+      <h2>Settings</h2>
+      <button class="icon-btn sm" id="closeSettings" title="Close"><svg><use href="#i-x"/></svg></button>
+    </div>
+
+    <fieldset>
+      <legend>Text</legend>
+      <label class="row">Font
+        <select id="setFont">
+          <option value="sans">Sans · 黑体</option>
+          <option value="serif">Serif · 宋体</option>
+          <option value="kai">Kai · 楷体</option>
+          <option value="system">System</option>
+        </select>
+      </label>
+      <label class="row">Subtitle size <span class="num" id="sizeVal"></span>
+        <input type="range" id="setSize" min="22" max="110" step="1">
+      </label>
+      <label class="row">Sidebar size <span class="num" id="sideSizeVal"></span>
+        <input type="range" id="setSideSize" min="12" max="24" step="1">
+      </label>
+      <label class="row check"><input type="checkbox" id="setPrev"> Show previous sentence above</label>
+      <label class="row">Theme
+        <select id="setTheme">
+          <option value="dark">Dark</option>
+          <option value="light">Light</option>
+          <option value="sepia">Sepia</option>
+        </select>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Playback</legend>
+      <label class="row">Speed <span class="num" id="rateVal"></span>
+        <input type="range" id="setRate" min="0.5" max="3" step="0.05">
+      </label>
+      <label class="row">Volume <span class="num" id="volVal"></span>
+        <input type="range" id="setVol" min="0" max="1" step="0.01">
+      </label>
+      <label class="row">Pause between sentences <span class="num" id="gapVal"></span>
+        <input type="range" id="setGap" min="0" max="1500" step="50">
+      </label>
+      <label class="row">Extra pause between paragraphs <span class="num" id="paraGapVal"></span>
+        <input type="range" id="setParaGap" min="0" max="2000" step="50">
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Voice</legend>
+      <label class="row">Engine
+        <select id="setEngine">
+          <option value="edge">Microsoft neural (online, best)</option>
+          <option value="browser">Browser built-in (offline)</option>
+        </select>
+      </label>
+      <label class="row">Language
+        <select id="setLang">
+          <option value="auto">Auto per sentence</option>
+          <option value="zh">Always Chinese voice</option>
+          <option value="en">Always English voice</option>
+        </select>
+      </label>
+      <label class="row">Chinese voice <select id="setZhVoice"></select></label>
+      <label class="row">English voice <select id="setEnVoice"></select></label>
+      <button class="chip" id="testVoice">Test voices</button>
+    </fieldset>
+
+    <p class="keys"><kbd>Space</kbd> play/pause · <kbd>←</kbd><kbd>→</kbd> sentence · <kbd>↑</kbd><kbd>↓</kbd> paragraph · <kbd>M</kbd> mark · <kbd>[</kbd><kbd>]</kbd> speed · <kbd>+</kbd><kbd>−</kbd> size · <kbd>S</kbd> sidebar · <kbd>O</kbd> outline · <kbd>F</kbd> full screen</p>
+  </div>
+</div>
+
+<div id="toast" class="toast" role="status" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

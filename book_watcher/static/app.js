@@ -1,0 +1,990 @@
+'use strict';
+
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('bw.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('bw.' + k, JSON.stringify(v)); } catch {} },
+};
+
+function checkAuth(r) {
+  if (r.status === 401) { location.href = '/login'; throw new Error('Signed out'); }
+  return r;
+}
+
+async function api(path, opts) {
+  const r = checkAuth(await fetch(path, opts));
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+  return r.json();
+}
+
+let toastTimer;
+function toast(msg, ms = 3500) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (t.hidden = true), ms);
+}
+
+/* ================================================================ settings */
+
+const DEFAULTS = {
+  font: 'sans', size: 46, sideSize: 16, showPrev: true, theme: 'dark',
+  rate: 1, volume: 1, gap: 250, paraGap: 450,
+  engine: 'edge', lang: 'auto',
+  zhVoice: 'zh-CN-XiaoxiaoNeural', enVoice: 'en-US-AvaNeural', bZh: '', bEn: '',
+  sidebar: true, sideTab: 'context',
+};
+const settings = { ...DEFAULTS, ...store.get('settings', {}) };
+if (!store.get('settings', null) && matchMedia('(max-width: 860px)').matches) settings.sidebar = false;
+const FONTS = {
+  sans: ['--font-sans', '--font-sans-en'], serif: ['--font-serif', '--font-serif-en'],
+  kai: ['--font-kai', '--font-kai-en'], system: ['--font-system', '--font-system'],
+};
+
+function saveSettings() { store.set('settings', settings); }
+
+function applySettings() {
+  const root = document.documentElement;
+  root.dataset.theme = settings.theme;
+  const [zhFont, enFont] = FONTS[settings.font] || FONTS.sans;
+  root.style.setProperty('--font-sub', `var(${zhFont})`);
+  root.style.setProperty('--font-sub-en', `var(${enFont})`);
+  root.style.setProperty('--sub-size', settings.size + 'px');
+  root.style.setProperty('--side-size', settings.sideSize + 'px');
+  if (settings.font === 'kai' && !$('#kai-font')) {
+    const l = document.createElement('link');
+    l.id = 'kai-font';
+    l.rel = 'stylesheet';
+    l.href = 'https://cdn.jsdelivr.net/npm/lxgw-wenkai-webfont@1.7.0/style.css';
+    document.head.append(l);
+  }
+  document.body.classList.toggle('side-folded', !settings.sidebar);
+
+  $('#setFont').value = settings.font;
+  $('#setSize').value = settings.size; $('#sizeVal').textContent = settings.size + 'px';
+  $('#setSideSize').value = settings.sideSize; $('#sideSizeVal').textContent = settings.sideSize + 'px';
+  $('#setPrev').checked = settings.showPrev;
+  $('#setTheme').value = settings.theme;
+  for (const id of ['#setRate', '#rateQuick']) $(id).value = settings.rate;
+  for (const id of ['#setVol', '#volQuick']) $(id).value = settings.volume;
+  $('#rateVal').textContent = $('#rateLabel').textContent = settings.rate.toFixed(2) + '×';
+  $('#volVal').textContent = Math.round(settings.volume * 100) + '%';
+  $('#setGap').value = settings.gap; $('#gapVal').textContent = settings.gap + ' ms';
+  $('#setParaGap').value = settings.paraGap; $('#paraGapVal').textContent = settings.paraGap + ' ms';
+  $('#setEngine').value = settings.engine;
+  $('#setLang').value = settings.lang;
+
+  audio.playbackRate = settings.rate;
+  audio.volume = settings.volume;
+}
+
+function setSetting(key, value) {
+  settings[key] = value;
+  saveSettings();
+  applySettings();
+  if (key === 'showPrev' && book) renderStage();
+  if (key === 'engine') { populateVoices(); if (playing) jump(cur); }
+}
+
+/* ================================================================ voices */
+
+let edgeVoices = null;
+const isZhLocale = l => /^zh/i.test(l);
+
+function voiceLabel(v) {
+  const name = v.id.replace(/^[a-z]+-[A-Za-z]+-/, '').replace(/Neural$/, '');
+  return `${name} · ${v.locale} · ${v.gender === 'Female' ? 'F' : 'M'}`;
+}
+
+async function populateVoices() {
+  const zhSel = $('#setZhVoice'), enSel = $('#setEnVoice');
+  let zh, en, zhKey, enKey;
+  if (settings.engine === 'edge') {
+    if (!edgeVoices) {
+      try { edgeVoices = await api('/api/voices'); }
+      catch { edgeVoices = []; toast('Could not load voice list (offline?)'); }
+    }
+    const order = (a, b) => a.locale.localeCompare(b.locale) || a.id.localeCompare(b.id);
+    zh = edgeVoices.filter(v => isZhLocale(v.locale)).sort(order).map(v => [v.id, voiceLabel(v)]);
+    en = edgeVoices.filter(v => !isZhLocale(v.locale)).sort(order).map(v => [v.id, voiceLabel(v)]);
+    zhKey = 'zhVoice'; enKey = 'enVoice';
+  } else {
+    const vs = speechSynthesis.getVoices();
+    zh = vs.filter(v => isZhLocale(v.lang)).map(v => [v.name, `${v.name} (${v.lang})`]);
+    en = vs.filter(v => /^en/i.test(v.lang)).map(v => [v.name, `${v.name} (${v.lang})`]);
+    zhKey = 'bZh'; enKey = 'bEn';
+  }
+  const fill = (sel, list, key) => {
+    if (!list.length) list = [[settings[key], settings[key] || '(default)']];
+    sel.innerHTML = list.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('');
+    sel.value = settings[key];
+    if (sel.value !== settings[key]) settings[key] = sel.value;
+    sel.onchange = () => { settings[key] = sel.value; saveSettings(); if (playing) jump(cur); };
+  };
+  fill(zhSel, zh, zhKey);
+  fill(enSel, en, enKey);
+}
+if ('speechSynthesis' in window) speechSynthesis.onvoiceschanged = () => settings.engine === 'browser' && populateVoices();
+
+const HAN = /[㐀-鿿豈-﫿]/g;
+function isZh(text) {
+  const han = (text.match(HAN) || []).length;
+  if (!han) return false;
+  const words = (text.match(/[A-Za-z]+/g) || []).length;
+  return han >= words * 0.5;
+}
+const zhFor = t => settings.lang === 'zh' || (settings.lang === 'auto' && isZh(t));
+const speakable = t => /[\p{L}\p{N}]/u.test(t);
+
+/* ================================================================ book data */
+
+let book = null;       // server JSON
+let S = [];            // sentences: {p, t}
+let P = [];            // paragraphs: {start, end, h, ch}
+let cur = 0;
+let marks = {};        // sentence index -> {t, at}
+const selected = new Set();
+let anchor = null;
+
+function buildIndex(b) {
+  S = []; P = [];
+  const chStart = new Map(b.chapters.map((c, i) => [c.p, i]));
+  let ch = 0;
+  b.paras.forEach((para, pi) => {
+    if (chStart.has(pi)) ch = chStart.get(pi);
+    const start = S.length;
+    for (const t of para.s) S.push({ p: pi, t });
+    P.push({ start, end: S.length - 1, h: !!para.h, ch });
+  });
+}
+const chapterOf = i => P[S[i].p].ch;
+const chapterStartSentence = c => P[book.chapters[c].p].start;
+
+/* ================================================================ state persistence */
+
+let saveTimer = null;
+function statePayload() { return JSON.stringify({ pos: cur, marks }); }
+function saveSoon() {
+  if (!book) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveNow, 800);
+}
+function saveNow() {
+  if (!book) return;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  fetch(`/api/books/${book.id}/state`, { method: 'PUT', body: statePayload() }).catch(() => {});
+}
+addEventListener('pagehide', () => {
+  if (book && saveTimer) navigator.sendBeacon(`/api/books/${book.id}/state`, new Blob([statePayload()], { type: 'application/json' }));
+});
+
+/* ================================================================ playback */
+
+const audio = new Audio();
+audio.preload = 'auto';
+let playing = false;
+let runId = 0;
+let settle = null;       // resolves the sentence currently being spoken
+let midSentence = false; // edge engine: paused in the middle of an audio clip
+let lastError = '';
+
+const audioCache = new Map(); // "voice\ntext" -> Promise<objectURL|null>
+function audioFor(i) {
+  const t = S[i].t;
+  const voice = zhFor(t) ? settings.zhVoice : settings.enVoice;
+  const key = voice + '\n' + t;
+  let pr = audioCache.get(key);
+  if (pr) { audioCache.delete(key); audioCache.set(key, pr); return pr; }
+  pr = fetch('/api/tts', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice, text: t }),
+  }).then(checkAuth).then(async r => {
+    if (r.status === 204) return null;
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+    return URL.createObjectURL(await r.blob());
+  });
+  pr.catch(() => audioCache.delete(key));
+  audioCache.set(key, pr);
+  while (audioCache.size > 80) {
+    const [oldKey, oldPr] = audioCache.entries().next().value;
+    audioCache.delete(oldKey);
+    oldPr.then(u => { if (u && audio.src !== u) URL.revokeObjectURL(u); }, () => {});
+  }
+  return pr;
+}
+
+function prefetch(from) {
+  if (settings.engine !== 'edge') return;
+  for (let k = 1; k <= 4 && from + k < S.length; k++) {
+    if (speakable(S[from + k].t)) audioFor(from + k).catch(() => {});
+  }
+}
+
+function speakEdge(i, id) {
+  return new Promise(async resolve => {
+    let done = false;
+    const finish = r => { if (done) return; done = true; if (settle === finish) settle = null; midSentence = false; setLoading(false); resolve(r); };
+    settle = finish;
+    const t = S[i].t;
+    if (!speakable(t)) { await sleep(450 / settings.rate); return finish('end'); }
+    let url;
+    setLoading(true);
+    try { url = await audioFor(i); }
+    catch (e) { lastError = e.message; return finish('error'); }
+    setLoading(false);
+    if (done || id !== runId) return finish('abort');
+    if (!url) { await sleep(400); return finish('end'); }
+    audio.onended = () => finish('end');
+    audio.onerror = () => { lastError = 'could not play audio'; finish('error'); };
+    audio.src = url;
+    audio.defaultPlaybackRate = audio.playbackRate = settings.rate;
+    audio.volume = settings.volume;
+    midSentence = true;
+    audio.play().catch(e => {
+      if (e.name === 'AbortError') return;
+      lastError = e.message;
+      finish('error');
+    });
+  });
+}
+
+function speakBrowser(i) {
+  return new Promise(resolve => {
+    let done = false;
+    const finish = r => { if (done) return; done = true; if (settle === finish) settle = null; resolve(r); };
+    settle = finish;
+    const t = S[i].t;
+    if (!speakable(t)) { sleep(450 / settings.rate).then(() => finish('end')); return; }
+    const zh = zhFor(t);
+    const u = new SpeechSynthesisUtterance(t);
+    const voices = speechSynthesis.getVoices();
+    u.voice = voices.find(v => v.name === (zh ? settings.bZh : settings.bEn))
+      || voices.find(v => (zh ? isZhLocale(v.lang) : /^en/i.test(v.lang))) || null;
+    u.lang = u.voice?.lang || (zh ? 'zh-CN' : 'en-US');
+    u.rate = settings.rate;
+    u.volume = settings.volume;
+    u.onend = () => finish('end');
+    u.onerror = e => finish(e.error === 'interrupted' || e.error === 'canceled' ? 'abort' : (lastError = e.error, 'error'));
+    speakBrowser.keep = u; // Chrome drops events for garbage-collected utterances
+    speechSynthesis.speak(u);
+  });
+}
+
+async function loop(id) {
+  while (id === runId && playing) {
+    prefetch(cur);
+    const r = settings.engine === 'edge' ? await speakEdge(cur, id) : await speakBrowser(cur);
+    if (id !== runId || !playing) return;
+    if (r === 'error') {
+      setPlaying(false);
+      toast(settings.engine === 'edge'
+        ? `Speech failed: ${lastError}. Check your connection, or switch Engine to “Browser built-in” in settings.`
+        : `Speech failed: ${lastError}`, 7000);
+      return;
+    }
+    if (cur >= S.length - 1) { setPlaying(false); toast('End of book'); return; }
+    const next = cur + 1;
+    const newPara = S[next].p !== S[cur].p;
+    const gap = settings.gap + (newPara ? settings.paraGap : 0);
+    setCur(next);
+    if (newPara && settings.paraGap > 0) setBlank(true);
+    await sleep(gap / settings.rate);
+    if (id !== runId || !playing) return;
+    setBlank(false);
+  }
+}
+
+const setBlank = on => $('.screen').classList.toggle('blank', on);
+
+function halt() {
+  setBlank(false);
+  audio.onended = audio.onerror = null;
+  audio.pause();
+  midSentence = false;
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
+  const s = settle;
+  settle = null;
+  s?.('abort');
+  setLoading(false);
+}
+
+function setPlaying(v) {
+  playing = v;
+  document.body.classList.toggle('paused', !v);
+  $('#btnPlay use').setAttribute('href', v ? '#i-pause' : '#i-play');
+  $('#btnPlay').title = v ? 'Pause (Space)' : 'Play (Space)';
+  if ('mediaSession' in navigator) navigator.mediaSession.playbackState = v ? 'playing' : 'paused';
+}
+function setLoading(v) { $('#btnPlay').classList.toggle('loading', v && playing); }
+
+function play() {
+  if (!book || playing) return;
+  setPlaying(true);
+  if (midSentence && settings.engine === 'edge') { audio.play().catch(() => {}); return; }
+  loop(++runId);
+}
+function pause() {
+  if (!playing) return;
+  setPlaying(false);
+  if (midSentence && settings.engine === 'edge' && !audio.ended) { audio.pause(); return; }
+  runId++;
+  halt();
+}
+const toggle = () => (playing ? pause() : play());
+
+/* ================================================================ full screen */
+
+let idleTimer;
+function setCinema(on) {
+  if (on === document.body.classList.contains('cinema')) return;
+  document.body.classList.toggle('cinema', on);
+  if (on) {
+    document.activeElement?.blur();
+    document.documentElement.requestFullscreen?.().catch(() => {}); // the class alone still works if refused
+    pokeIdle();
+  } else {
+    clearTimeout(idleTimer);
+    document.body.classList.remove('idle');
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    requestAnimationFrame(() => scrollToCurrent('instant'));
+  }
+}
+function pokeIdle() {
+  document.body.classList.remove('idle');
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => document.body.classList.add('idle'), 1500);
+}
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement) setCinema(false); });
+document.addEventListener('mousemove', () => document.body.classList.contains('cinema') && pokeIdle());
+function stopAll() { pause(); runId++; halt(); }
+
+function jump(i, autoplay = false) {
+  if (!book) return;
+  runId++;
+  halt();
+  setCur(clamp(i, 0, S.length - 1), { scroll: 'jump' });
+  if (autoplay && !playing) setPlaying(true);
+  if (playing) loop(runId);
+}
+function jumpPara(dir) {
+  const p = S[cur].p;
+  if (dir < 0) jump(cur > P[p].start ? P[p].start : P[Math.max(0, p - 1)].start);
+  else jump(P[Math.min(P.length - 1, p + 1)].start);
+}
+
+/* ================================================================ rendering: stage */
+
+function setCur(i, opts = {}) {
+  cur = i;
+  renderStage();
+  updateContext(opts.scroll);
+  updateOutline();
+  updateProgress();
+  saveSoon();
+  if ('mediaSession' in navigator && book) {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: S[cur].t.slice(0, 80), artist: book.author, album: `${book.title} · ${book.chapters[chapterOf(cur)]?.title || ''}`,
+    });
+  }
+}
+
+function renderStage() {
+  const s = S[cur];
+  const sub = $('#subtitle');
+  sub.textContent = s.t;
+  sub.lang = isZh(s.t) ? 'zh-CN' : 'en';
+  sub.classList.toggle('heading', P[s.p].h);
+  sub.classList.toggle('marked', cur in marks);
+
+  const prev = $('#prevLine');
+  const showPrev = settings.showPrev && cur > 0 && chapterOf(cur - 1) === chapterOf(cur);
+  prev.textContent = showPrev ? S[cur - 1].t : '';
+  prev.lang = showPrev && isZh(S[cur - 1].t) ? 'zh-CN' : 'en';
+  prev.hidden = !settings.showPrev;
+
+  const ch = chapterOf(cur);
+  $('#chapterLabel').textContent = book.chapters[ch]?.title || '';
+  if ($('#chapterSelect').value !== String(ch)) $('#chapterSelect').value = ch;
+  const btn = $('#btnMarkCur');
+  btn.classList.toggle('on', cur in marks);
+  $('use', btn).setAttribute('href', cur in marks ? '#i-mark-on' : '#i-mark');
+  $('span', btn).textContent = cur in marks ? 'Marked' : 'Mark';
+}
+
+let scrubbing = false;
+function updateProgress() {
+  const bar = $('#progress');
+  if (!scrubbing) bar.value = cur;
+  showProgress(scrubbing ? +bar.value : cur);
+}
+function showProgress(i) {
+  const ch = chapterOf(i);
+  const c = book.chapters[ch];
+  const cStart = P[c.p].start;
+  const cEnd = ch + 1 < book.chapters.length ? chapterStartSentence(ch + 1) - 1 : S.length - 1;
+  $('#progressLeft').textContent = scrubbing ? `→ ${c.title}: ${S[i].t}` : `${c.title} · ${i - cStart + 1} / ${cEnd - cStart + 1}`;
+  $('#progressRight').textContent = `${(100 * i / Math.max(1, S.length - 1)).toFixed(1)}%`;
+}
+
+/* ================================================================ rendering: context sidebar */
+
+const WINDOW = 25;   // paragraphs either side of the current one
+let win = { lo: 0, hi: -1 };
+let follow = true;
+let programmaticScroll = 0;
+
+function sentHtml(i) {
+  const cls = ['sent'];
+  if (i in marks) cls.push('marked');
+  if (selected.has(i)) cls.push('sel');
+  if (i === cur) cls.push('cur');
+  return `<span class="${cls.join(' ')}" data-i="${i}">${esc(S[i].t)}</span>`;
+}
+
+function renderContext() {
+  const chStarts = new Set(book.chapters.map(c => c.p));
+  let html = win.lo > 0 ? '<button class="more" data-more="-1">Show earlier</button>' : '';
+  for (let p = win.lo; p <= win.hi; p++) {
+    if (chStarts.has(p) || p === win.lo) html += `<div class="ctx-chapter">${esc(book.chapters[P[p].ch].title)}</div>`;
+    let inner = '';
+    for (let i = P[p].start; i <= P[p].end; i++) {
+      const prevT = i > P[p].start ? S[i - 1].t : '';
+      const joinCjk = /[　-鿿＀-￯]$/.test(prevT) || /^[　-鿿＀-￯]/.test(S[i].t);
+      inner += (prevT && !joinCjk ? ' ' : '') + sentHtml(i);
+    }
+    html += `<p class="${P[p].h ? 'h' : ''}" lang="${isZh(S[P[p].start].t) ? 'zh-CN' : 'en'}">${inner}</p>`;
+  }
+  if (win.hi < P.length - 1) html += '<button class="more" data-more="1">Show later</button>';
+  $('#context').innerHTML = html;
+}
+
+function updateContext(scroll) {
+  if (!book) return;
+  const p = S[cur].p;
+  const nearTop = p < win.lo + 3 && win.lo > 0;
+  const nearBottom = p > win.hi - 3 && win.hi < P.length - 1;
+  if (p < win.lo || p > win.hi || ((nearTop || nearBottom) && follow)) {
+    win = { lo: Math.max(0, p - WINDOW), hi: Math.min(P.length - 1, p + WINDOW) };
+    renderContext();
+  } else {
+    $('#context .sent.cur')?.classList.remove('cur');
+    $(`#context [data-i="${cur}"]`)?.classList.add('cur');
+  }
+  if (scroll === 'jump') follow = true;
+  if (follow) scrollToCurrent(scroll === 'jump' || scroll === 'instant' ? 'instant' : 'smooth');
+  $('#btnFollow').hidden = follow;
+}
+
+function scrollToCurrent(behavior = 'smooth') {
+  const el = $(`#context [data-i="${cur}"]`);
+  const box = $('#context');
+  if (!el || !settings.sidebar || box.offsetParent === null) return;
+  const top = el.offsetTop - box.clientHeight / 2 + el.offsetHeight / 2;
+  programmaticScroll = Date.now();
+  box.scrollTo({ top, behavior });
+}
+
+function refreshSentence(i) {
+  const el = $(`#context [data-i="${i}"]`);
+  if (!el) return;
+  el.classList.toggle('marked', i in marks);
+  el.classList.toggle('sel', selected.has(i));
+}
+
+function updateSelBar() {
+  const n = selected.size;
+  $('#selBar').hidden = n === 0;
+  $('#selCount').textContent = `${n} selected`;
+  const allMarked = n > 0 && [...selected].every(i => i in marks);
+  $('#selMark').hidden = allMarked;
+}
+
+function clearSelection() {
+  const old = [...selected];
+  selected.clear();
+  anchor = null;
+  old.forEach(refreshSentence);
+  updateSelBar();
+}
+
+function setMarks(indices, on) {
+  for (const i of indices) {
+    if (on) marks[i] = { t: S[i].t, at: Date.now() };
+    else delete marks[i];
+    refreshSentence(i);
+  }
+  renderStage();
+  renderMarks();
+  saveSoon();
+}
+
+/* ================================================================ outline pane */
+
+let OL = [];               // {title, depth, s (first sentence), parent, kids}
+let olCollapsed = new Set();
+let olCur = -1;
+
+function buildOutline(b) {
+  const src = b.outline?.length ? b.outline : b.chapters.map(c => ({ title: c.title, depth: 0, p: c.p }));
+  OL = [];
+  const stack = []; // indices of open ancestors, compared by the TOC's own depth
+  src.forEach(o => {
+    while (stack.length && src[stack.at(-1)].depth >= o.depth) stack.pop();
+    const parent = stack.length ? stack.at(-1) : -1;
+    OL.push({ title: o.title, s: P[o.p].start, parent, kids: 0, depth: parent < 0 ? 0 : OL[parent].depth + 1 });
+    if (parent >= 0) OL[parent].kids++;
+    stack.push(OL.length - 1);
+  });
+  // Small outlines start fully open; big ones show parts and chapters, folding anything deeper.
+  olCollapsed = new Set(OL.length > 80 ? OL.map((n, i) => (n.kids && n.depth >= 1 ? i : -1)).filter(i => i >= 0) : []);
+  olCur = -1;
+  $('#outlineExpand').hidden = !OL.some(n => n.kids);
+}
+
+function outlineAt(i) {
+  let best = -1;
+  OL.forEach((n, k) => { if (n.s <= i && (best < 0 || n.s >= OL[best].s)) best = k; });
+  return best;
+}
+
+function renderOutline() {
+  const q = $('#outlineFilter').value.trim().toLowerCase();
+  let visible;
+  if (q) {
+    const show = new Set();
+    OL.forEach((n, i) => { if (n.title.toLowerCase().includes(q)) for (let k = i; k >= 0; k = OL[k].parent) show.add(k); });
+    visible = i => show.has(i);
+  } else {
+    visible = i => { for (let k = OL[i].parent; k >= 0; k = OL[k].parent) if (olCollapsed.has(k)) return false; return true; };
+  }
+  const curS = olCur >= 0 ? OL[olCur].s : -1;
+  const hi = t => {
+    if (!q) return esc(t);
+    const at = t.toLowerCase().indexOf(q);
+    return at < 0 ? esc(t) : esc(t.slice(0, at)) + `<mark>${esc(t.slice(at, at + q.length))}</mark>` + esc(t.slice(at + q.length));
+  };
+  let html = '';
+  OL.forEach((n, i) => {
+    if (!visible(i)) return;
+    const cls = ['ol-row'];
+    if (q && n.title.toLowerCase().includes(q)) cls.push('hit');
+    if (i === olCur) cls.push('cur');
+    else if (n.s < curS) cls.push('read');
+    const open = q || !olCollapsed.has(i);
+    html += `<div class="${cls.join(' ')}" role="treeitem" aria-level="${n.depth + 1}" ${n.kids ? `aria-expanded="${!!open}"` : ''} style="--d:${n.depth}" lang="${isZh(n.title) ? 'zh-CN' : 'en'}">`
+      + (n.kids ? `<button class="ol-toggle" data-toggle="${i}" aria-label="${open ? 'Collapse' : 'Expand'}"><svg><use href="#i-next"/></svg></button>` : '<span class="ol-toggle"></span>')
+      + `<button class="ol-title" data-go="${i}">${hi(n.title)}</button>`
+      + `<span class="ol-pct num">${Math.round(100 * n.s / Math.max(1, S.length - 1))}%</span></div>`;
+  });
+  $('#outline').innerHTML = html || '<p class="empty">No matching sections.</p>';
+  $('#outlineExpand').textContent = olCollapsed.size ? 'Expand all' : 'Collapse all';
+}
+
+function updateOutline() {
+  const k = outlineAt(cur);
+  if (k === olCur && $('#outline').childElementCount) return;
+  olCur = k;
+  for (let a = k >= 0 ? OL[k].parent : -1; a >= 0; a = OL[a].parent) olCollapsed.delete(a);
+  renderOutline();
+  scrollOutline();
+}
+
+function scrollOutline() {
+  const row = $('#outline .ol-row.cur');
+  if (row && !$('#pane-outline').hidden && settings.sidebar) row.scrollIntoView({ block: 'nearest' });
+}
+
+function showTab(name) {
+  if (!['outline', 'context', 'marks'].includes(name)) name = 'context';
+  $$('.tab').forEach(t => t.setAttribute('aria-selected', t.dataset.tab === name));
+  for (const p of ['outline', 'context', 'marks']) $(`#pane-${p}`).hidden = p !== name;
+  if (settings.sideTab !== name) { settings.sideTab = name; saveSettings(); }
+  requestAnimationFrame(() => {
+    if (name === 'context' && follow) scrollToCurrent('instant');
+    if (name === 'outline') { const r = $('#outline .ol-row.cur'); r?.scrollIntoView({ block: 'center' }); }
+  });
+}
+
+/* ================================================================ marks pane */
+
+function renderMarks() {
+  const idx = Object.keys(marks).map(Number).filter(i => i < S.length).sort((a, b) => a - b);
+  $('#markCount').textContent = idx.length || '';
+  if (!idx.length) {
+    $('#marksList').innerHTML = '<p class="empty">No marks yet. Press <kbd>M</kbd> while listening, or select sentences in Context.</p>';
+    return;
+  }
+  let html = '', lastCh = -1;
+  for (const i of idx) {
+    const ch = chapterOf(i);
+    if (ch !== lastCh) { html += `<h4>${esc(book.chapters[ch].title)}</h4>`; lastCh = ch; }
+    html += `<div class="mark-item" role="button" tabindex="0" data-i="${i}" lang="${isZh(S[i].t) ? 'zh-CN' : 'en'}">
+      <span class="t">${esc(S[i].t)}</span>
+      <button class="icon-btn sm" data-unmark="${i}" title="Remove mark"><svg><use href="#i-x"/></svg></button></div>`;
+  }
+  $('#marksList').innerHTML = html;
+}
+
+function marksMarkdown() {
+  const idx = Object.keys(marks).map(Number).sort((a, b) => a - b);
+  let md = `# ${book.title}${book.author ? ' — ' + book.author : ''}\n`, lastCh = -1;
+  for (const i of idx) {
+    const ch = chapterOf(i);
+    if (ch !== lastCh) { md += `\n## ${book.chapters[ch].title}\n\n`; lastCh = ch; }
+    md += `> ${S[i].t}\n\n`;
+  }
+  return md;
+}
+
+async function copyText(text, what) {
+  try { await navigator.clipboard.writeText(text); toast(`Copied ${what}`); }
+  catch { toast('Clipboard not available'); }
+}
+
+/* ================================================================ library */
+
+async function showLibrary() {
+  setCinema(false);
+  if (book) { stopAll(); saveNow(); }
+  book = null;
+  document.title = 'Book Watcher';
+  $('#reader').hidden = true;
+  $('#library').hidden = false;
+  $('#settings').hidden = true;
+  let books = [];
+  try { books = await api('/api/books'); } catch (e) { toast(e.message); }
+  $('#bookList').innerHTML = books.length ? books.map(b => {
+    const pct = b.sentences ? Math.round(100 * b.pos / Math.max(1, b.sentences - 1)) : 0;
+    return `<a class="book" href="#/book/${b.id}">
+      <h3>${esc(b.title)}</h3>
+      ${b.author ? `<div class="by">${esc(b.author)}</div>` : ''}
+      <div class="meta">${pct}% read · ${b.sentences.toLocaleString()} sentences${b.marks ? ` · ${b.marks} marked` : ''}</div>
+      <div class="bar"><i style="width:${pct}%"></i></div>
+      <button class="icon-btn sm del" data-del="${b.id}" title="Remove from library"><svg><use href="#i-x"/></svg></button>
+    </a>`;
+  }).join('') : '<p class="empty">Your library is empty.</p>';
+}
+
+async function uploadFiles(files) {
+  files = [...files].filter(f => /\.epub$/i.test(f.name) || f.type === 'application/epub+zip');
+  if (!files.length) { toast('Please choose an .epub file'); return; }
+  const dz = $('#dropzone');
+  dz.classList.add('busy');
+  let lastId = null;
+  for (const f of files) {
+    $('strong', dz).textContent = `Reading ${f.name}…`;
+    try {
+      const r = await api('/api/books', { method: 'POST', headers: { 'X-Filename': encodeURIComponent(f.name) }, body: f });
+      lastId = r.id;
+    } catch (e) { toast(e.message, 6000); }
+  }
+  dz.classList.remove('busy');
+  $('strong', dz).textContent = 'Drop an EPUB here';
+  if (lastId && files.length === 1) location.hash = `#/book/${lastId}`;
+  else showLibrary();
+}
+
+/* ================================================================ reader */
+
+async function openBook(id) {
+  let b, st;
+  try { [b, st] = await Promise.all([api(`/api/books/${id}`), api(`/api/books/${id}/state`)]); }
+  catch (e) { toast(e.message); location.hash = '#/'; return; }
+  book = b;
+  buildIndex(b);
+  marks = st.marks || {};
+  selected.clear();
+  anchor = null;
+  follow = true;
+  win = { lo: 0, hi: -1 };
+  document.title = `${b.title} · Book Watcher`;
+  $('#bookTitle').textContent = b.title;
+  $('#chapterSelect').innerHTML = b.chapters.map((c, i) => `<option value="${i}">${esc(c.title)}</option>`).join('');
+  $('#progress').max = S.length - 1;
+  buildOutline(b);
+  $('#outlineFilter').value = '';
+  $('#library').hidden = true;
+  $('#reader').hidden = false;
+  setCur(clamp(st.pos || 0, 0, S.length - 1), { scroll: 'instant' });
+  renderMarks();
+  updateSelBar();
+  saveNow();
+}
+
+function route() {
+  const m = location.hash.match(/^#\/book\/([0-9a-f]{12})/);
+  if (m) { if (book?.id !== m[1]) { if (book) { stopAll(); saveNow(); } openBook(m[1]); } }
+  else showLibrary();
+}
+
+/* ================================================================ events */
+
+function bindRange(sel, key, parse = Number) {
+  $(sel).addEventListener('input', e => setSetting(key, parse(e.target.value)));
+}
+
+function init() {
+  applySettings();
+  api('/api/config').then(c => { $('#signOut').hidden = !c.auth; }).catch(() => {});
+  populateVoices();
+
+  // library
+  $('#fileInput').addEventListener('change', e => { uploadFiles(e.target.files); e.target.value = ''; });
+  const dz = $('#dropzone');
+  addEventListener('dragover', e => { e.preventDefault(); if (!$('#library').hidden) dz.classList.add('over'); });
+  addEventListener('dragleave', e => { if (!e.relatedTarget) dz.classList.remove('over'); });
+  addEventListener('drop', e => {
+    e.preventDefault();
+    dz.classList.remove('over');
+    if (e.dataTransfer?.files.length) uploadFiles(e.dataTransfer.files);
+  });
+  $('#bookList').addEventListener('click', async e => {
+    const del = e.target.closest('[data-del]');
+    if (!del) return;
+    e.preventDefault();
+    const title = $('h3', del.closest('.book')).textContent;
+    if (!confirm(`Remove “${title}” and its marks from the library?`)) return;
+    await api(`/api/books/${del.dataset.del}`, { method: 'DELETE' }).catch(err => toast(err.message));
+    showLibrary();
+  });
+
+  // transport
+  $('#btnPlay').addEventListener('click', toggle);
+  $('#btnPrev').addEventListener('click', () => jump(cur - 1));
+  $('#btnNext').addEventListener('click', () => jump(cur + 1));
+  $('#btnPrevPara').addEventListener('click', () => jumpPara(-1));
+  $('#btnNextPara').addEventListener('click', () => jumpPara(1));
+  $('#btnMarkCur').addEventListener('click', () => setMarks([cur], !(cur in marks)));
+  $('#btnLibrary').addEventListener('click', () => (location.hash = '#/'));
+  $('#btnFull').addEventListener('click', () => setCinema(true));
+  // in full screen: click anywhere to play/pause, double-click to leave
+  $('.screen').addEventListener('click', () => document.body.classList.contains('cinema') && toggle());
+  $('.screen').addEventListener('dblclick', () => { getSelection().removeAllRanges(); setCinema(false); });
+  $('#chapterSelect').addEventListener('change', e => jump(chapterStartSentence(+e.target.value)));
+
+  const bar = $('#progress');
+  bar.addEventListener('input', () => { scrubbing = true; showProgress(+bar.value); });
+  bar.addEventListener('change', () => { scrubbing = false; jump(+bar.value); });
+
+  // quick controls + settings
+  $('#rateQuick').addEventListener('input', e => setSetting('rate', +e.target.value));
+  $('#volQuick').addEventListener('input', e => setSetting('volume', +e.target.value));
+  bindRange('#setRate', 'rate');
+  bindRange('#setVol', 'volume');
+  bindRange('#setSize', 'size');
+  bindRange('#setSideSize', 'sideSize');
+  bindRange('#setGap', 'gap');
+  bindRange('#setParaGap', 'paraGap');
+  $('#setFont').addEventListener('change', e => setSetting('font', e.target.value));
+  $('#setTheme').addEventListener('change', e => setSetting('theme', e.target.value));
+  $('#setPrev').addEventListener('change', e => setSetting('showPrev', e.target.checked));
+  $('#setEngine').addEventListener('change', e => setSetting('engine', e.target.value));
+  $('#setLang').addEventListener('change', e => { setSetting('lang', e.target.value); if (playing) jump(cur); });
+  $('#btnSettings').addEventListener('click', () => ($('#settings').hidden = !$('#settings').hidden));
+  $('#closeSettings').addEventListener('click', () => ($('#settings').hidden = true));
+  document.addEventListener('pointerdown', e => {
+    const s = $('#settings');
+    if (!s.hidden && !s.contains(e.target) && !e.target.closest('#btnSettings')) s.hidden = true;
+  });
+  $('#testVoice').addEventListener('click', async () => {
+    const wasPlaying = playing;
+    pause();
+    const saved = { S, cur };
+    S = [{ p: 0, t: '你好，这是中文语音。' }, { p: 0, t: 'And this is the English voice.' }];
+    try {
+      for (let i = 0; i < S.length; i++) {
+        const r = settings.engine === 'edge' ? await testEdge(i) : await speakBrowser(i);
+        if (r === 'error') { toast(`Speech failed: ${lastError}`); break; }
+      }
+    } finally {
+      S = saved.S; cur = saved.cur;
+      if (wasPlaying) play();
+    }
+  });
+
+  // sidebar
+  const toggleSidebar = () => {
+    setSetting('sidebar', !settings.sidebar);
+    if (settings.sidebar) requestAnimationFrame(() => { scrollToCurrent('instant'); scrollOutline(); });
+  };
+  $('#btnSidebar').addEventListener('click', toggleSidebar);
+  $('#btnFold').addEventListener('click', toggleSidebar);
+  $$('.tab').forEach(tab => tab.addEventListener('click', () => showTab(tab.dataset.tab)));
+  showTab(settings.sideTab);
+
+  // outline
+  $('#outline').addEventListener('click', e => {
+    const t = e.target.closest('[data-toggle]');
+    if (t) {
+      const i = +t.dataset.toggle;
+      olCollapsed.has(i) ? olCollapsed.delete(i) : olCollapsed.add(i);
+      renderOutline();
+      return;
+    }
+    const go = e.target.closest('[data-go]');
+    if (go) jump(OL[+go.dataset.go].s);
+  });
+  $('#outlineFilter').addEventListener('input', renderOutline);
+  $('#outlineFilter').addEventListener('keydown', e => {
+    if (e.key === 'Enter') $('#outline .hit [data-go]')?.click();
+    if (e.key === 'Escape') { e.target.value = ''; renderOutline(); e.target.blur(); }
+  });
+  $('#outlineExpand').addEventListener('click', () => {
+    const parents = OL.map((n, i) => (n.kids ? i : -1)).filter(i => i >= 0);
+    olCollapsed = olCollapsed.size ? new Set() : new Set(parents);
+    renderOutline();
+  });
+
+  const ctx = $('#context');
+  let suppressClick = false;
+  ctx.addEventListener('scroll', () => {
+    if (Date.now() - programmaticScroll < 900) return;
+    follow = false;
+    $('#btnFollow').hidden = false;
+  }, { passive: true });
+  $('#btnFollow').addEventListener('click', () => {
+    follow = true;
+    $('#btnFollow').hidden = true;
+    updateContext('jump');
+  });
+  ctx.addEventListener('mouseup', e => {
+    if (e.detail > 1) return;
+    const sel = getSelection();
+    if (!sel.rangeCount || sel.isCollapsed) return;
+    const range = sel.getRangeAt(0);
+    const hit = $$('.sent', ctx).filter(s => range.intersectsNode(s)).map(s => +s.dataset.i);
+    if (!hit.length) return;
+    hit.forEach(i => selected.add(i));
+    hit.forEach(refreshSentence);
+    anchor = hit[hit.length - 1];
+    sel.removeAllRanges();
+    suppressClick = true;
+    setTimeout(() => (suppressClick = false), 0);
+    updateSelBar();
+  });
+  ctx.addEventListener('click', e => {
+    const more = e.target.closest('[data-more]');
+    if (more) {
+      const d = +more.dataset.more;
+      const keep = ctx.scrollHeight - ctx.scrollTop;
+      if (d < 0) win.lo = Math.max(0, win.lo - WINDOW); else win.hi = Math.min(P.length - 1, win.hi + WINDOW);
+      follow = false;
+      renderContext();
+      if (d < 0) ctx.scrollTop = ctx.scrollHeight - keep;
+      $('#btnFollow').hidden = false;
+      return;
+    }
+    const s = e.target.closest('.sent');
+    if (!s || suppressClick || e.detail > 1) return;
+    const i = +s.dataset.i;
+    if (e.shiftKey && anchor != null) {
+      const [a, b] = anchor < i ? [anchor, i] : [i, anchor];
+      for (let k = a; k <= b; k++) { selected.add(k); refreshSentence(k); }
+    } else {
+      selected.has(i) ? selected.delete(i) : selected.add(i);
+      refreshSentence(i);
+      anchor = i;
+    }
+    updateSelBar();
+  });
+  ctx.addEventListener('dblclick', e => {
+    const s = e.target.closest('.sent');
+    if (!s) return;
+    getSelection().removeAllRanges();
+    const i = +s.dataset.i;
+    // undo the toggle from the first click of the double-click
+    selected.has(i) ? selected.delete(i) : selected.add(i);
+    refreshSentence(i);
+    updateSelBar();
+    jump(i, true);
+  });
+
+  $('#selMark').addEventListener('click', () => { setMarks([...selected], true); clearSelection(); });
+  $('#selUnmark').addEventListener('click', () => { setMarks([...selected], false); clearSelection(); });
+  $('#selPlay').addEventListener('click', () => { const i = Math.min(...selected); clearSelection(); jump(i, true); });
+  $('#selCopy').addEventListener('click', () => {
+    copyText([...selected].sort((a, b) => a - b).map(i => S[i].t).join(' '), 'selection');
+  });
+  $('#selClear').addEventListener('click', clearSelection);
+
+  $('#marksList').addEventListener('click', e => {
+    const un = e.target.closest('[data-unmark]');
+    if (un) { setMarks([+un.dataset.unmark], false); return; }
+    const item = e.target.closest('.mark-item');
+    if (item) jump(+item.dataset.i);
+  });
+  $('#marksList').addEventListener('keydown', e => {
+    const item = e.target.closest('.mark-item');
+    if (item && e.key === 'Enter') jump(+item.dataset.i);
+  });
+  $('#exportMd').addEventListener('click', () => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([marksMarkdown()], { type: 'text/markdown' }));
+    a.download = `${book.title.replace(/[\\/:*?"<>|]/g, '_')} - marks.md`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+  $('#copyMarks').addEventListener('click', () => copyText(marksMarkdown(), 'all marks'));
+
+  // keyboard
+  addEventListener('keydown', e => {
+    if (!book || $('#reader').hidden || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.target.closest('input:not([type=range]):not([type=checkbox]), select, textarea')) return;
+    const k = e.key;
+    const handled = {
+      ' ': toggle,
+      'k': toggle,
+      'ArrowLeft': () => jump(cur - 1),
+      'ArrowRight': () => jump(cur + 1),
+      'ArrowUp': () => jumpPara(-1),
+      'ArrowDown': () => jumpPara(1),
+      'm': () => setMarks([cur], !(cur in marks)),
+      's': () => $('#btnSidebar').click(),
+      'f': () => setCinema(!document.body.classList.contains('cinema')),
+      'o': () => { if (!settings.sidebar) setSetting('sidebar', true); showTab('outline'); },
+      ',': () => $('#btnSettings').click(),
+      '[': () => setSetting('rate', clamp(+(settings.rate - 0.1).toFixed(2), 0.5, 3)),
+      ']': () => setSetting('rate', clamp(+(settings.rate + 0.1).toFixed(2), 0.5, 3)),
+      '=': () => setSetting('size', clamp(settings.size + 4, 22, 110)),
+      '+': () => setSetting('size', clamp(settings.size + 4, 22, 110)),
+      '-': () => setSetting('size', clamp(settings.size - 4, 22, 110)),
+      'Escape': () => {
+        if (document.body.classList.contains('cinema')) setCinema(false);
+        else if (!$('#settings').hidden) $('#settings').hidden = true;
+        else clearSelection();
+      },
+    }[k.length === 1 ? k.toLowerCase() : k];
+    if (!handled) return;
+    if (e.target.matches('input[type=range]') && k.startsWith('Arrow')) return;
+    e.preventDefault();
+    if (e.target.matches('button') && (k === ' ')) e.target.blur();
+    handled();
+  });
+
+  if ('mediaSession' in navigator) {
+    const ms = navigator.mediaSession;
+    ms.setActionHandler('play', play);
+    ms.setActionHandler('pause', pause);
+    ms.setActionHandler('previoustrack', () => jump(cur - 1));
+    ms.setActionHandler('nexttrack', () => jump(cur + 1));
+  }
+
+  addEventListener('hashchange', route);
+  route();
+}
+
+// Plays one test sentence through the edge engine without touching the reading loop.
+function testEdge(i) {
+  runId++;
+  const id = runId;
+  playing = true;
+  return speakEdge(i, id).finally(() => { playing = false; });
+}
+
+init();
