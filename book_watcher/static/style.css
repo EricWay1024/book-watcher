@@ -204,7 +204,11 @@ select {
 .book .bar { height: 3px; border-radius: 3px; background: var(--line); overflow: hidden; margin-top: auto; }
 .book .bar i { display: block; height: 100%; background: var(--accent); }
 .book .del { position: absolute; top: 8px; right: 8px; opacity: 0; }
-.book:hover .del, .book .del:focus-visible { opacity: 1; }
+.book .fin { position: absolute; top: 8px; right: 42px; opacity: 0; }
+.book:hover .del, .book .del:focus-visible, .book:hover .fin, .book .fin:focus-visible { opacity: 1; }
+.book .fin.on { opacity: 1; color: var(--accent); }
+.book h3 { padding-right: 60px; }
+@media (hover: none) { .book .fin, .book .del { opacity: .6; } } /* touch screens have no hover */
 .empty { color: var(--muted); text-align: center; padding: 20px; grid-column: 1 / -1; }
 
 .lib-nav { display: flex; gap: 8px; flex-wrap: wrap; margin: -12px 0 24px; }

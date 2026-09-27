@@ -1020,8 +1020,9 @@ async function showLibrary() {
     return `<a class="book" href="#/book/${b.id}">
       <h3>${esc(b.title)}</h3>
       ${b.author ? `<div class="by">${esc(b.author)}</div>` : ''}
-      <div class="meta">${pct}% read · ${b.sentences.toLocaleString()} sentences${b.marks ? ` · ${b.marks} marked` : ''}</div>
-      <div class="bar"><i style="width:${pct}%"></i></div>
+      <div class="meta">${b.finished ? `Finished · ${new Date(b.finished).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}` : `${pct}% read`} · ${b.sentences.toLocaleString()} sentences${b.marks ? ` · ${b.marks} marked` : ''}</div>
+      <div class="bar"><i style="width:${b.finished ? 100 : pct}%"></i></div>
+      <button class="icon-btn sm fin${b.finished ? ' on' : ''}" data-fin="${b.id}" title="${b.finished ? 'Finished · click to mark as not finished' : 'Mark as finished'}"><svg><use href="#i-check"/></svg></button>
       <button class="icon-btn sm del" data-del="${b.id}" title="Remove from library"><svg><use href="#i-x"/></svg></button>
     </a>`;
   }).join('') : '<p class="empty">Your library is empty.</p>';
@@ -1136,6 +1137,15 @@ function init() {
     if (e.dataTransfer?.files.length) uploadFiles(e.dataTransfer.files);
   });
   $('#bookList').addEventListener('click', async e => {
+    const fin = e.target.closest('[data-fin]');
+    if (fin) {
+      e.preventDefault();
+      const on = !fin.classList.contains('on');
+      await api(`/api/books/${fin.dataset.fin}/finished`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ finished: on }) })
+        .catch(err => toast(err.message));
+      showLibrary();
+      return;
+    }
     const del = e.target.closest('[data-del]');
     if (!del) return;
     e.preventDefault();

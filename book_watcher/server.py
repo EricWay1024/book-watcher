@@ -181,6 +181,14 @@ class Library:
         state.setdefault("finished", int(time.time() * 1000))
         self.save_state(book_id, state)
 
+    def set_finished(self, book_id: str, finished: bool) -> None:
+        state = self.state(book_id)
+        if finished:
+            state["finished"] = int(time.time() * 1000)
+        else:
+            state.pop("finished", None)
+        self.save_state(book_id, state)
+
     # ---- reading time: stats.json = {"days": {"YYYY-MM-DD": {"s": secs, "n": sentences, "b": {book: secs}}}}
     def stats(self) -> dict:
         return _read(self.root / "stats.json", {"days": {}})
@@ -439,6 +447,12 @@ def make_app(store: Store, users: Users, cache_mb: int = 0) -> web.Application:
         body = await request.json()
         marks = lib_of(request).edit_marks(request.match_info["id"], body.get("add") or {}, body.get("remove") or [])
         return web.json_response({"marks": marks})
+
+    @routes.post("/api/books/{id}/finished")
+    async def finished(request):
+        body = await request.json()
+        lib_of(request).set_finished(request.match_info["id"], bool(body.get("finished", True)))
+        return web.json_response({"ok": True})
 
     @routes.post("/api/read")
     async def read(request):
