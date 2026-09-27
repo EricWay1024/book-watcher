@@ -17,6 +17,9 @@ Then drop more EPUBs onto the library page.
   flowing text (its own text size, chapters load as you scroll). Both modes share one position: switch
   and you continue from the same sentence. Select text to Mark, Copy, or *Listen from here*. Active
   reading counts toward reading stats.
+- **Buffering**: about a minute of upcoming speech is fetched ahead (more sentences at higher speed), and
+  every clip is kept in the browser's cache, so replays and already-fetched passages work offline. If
+  the connection drops, playback waits and continues by itself when it's back.
 - **Time left** under the progress bar: minutes left in the chapter and hours left in the book at your
   current speed, pauses included. The pace of each voice is learned from the clips you play.
 - **Full screen** (<kbd>F</kbd>, or the ⛶ button): only the sentence being read. Tap the left third of the

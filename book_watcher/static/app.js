@@ -142,6 +142,7 @@ function setSetting(key, value) {
   if (book && ['rate', 'gap', 'paraGap', 'lang', 'engine'].includes(key)) {
     if (key === 'lang') buildTimeIndex();
     updateProgress();
+    if (key !== 'gap' && key !== 'paraGap') pruneFetches();
   }
   if (key === 'engine') { populateVoices(); if (playing) jump(cur); }
 }
@@ -179,7 +180,7 @@ async function populateVoices() {
     sel.innerHTML = list.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('');
     sel.value = settings[key];
     if (sel.value !== settings[key]) settings[key] = sel.value;
-    sel.onchange = () => { settings[key] = sel.value; saveSettings(!SYNCED.includes(key)); if (book) updateProgress(); if (playing) jump(cur); };
+    sel.onchange = () => { settings[key] = sel.value; saveSettings(!SYNCED.includes(key)); if (book) { updateProgress(); pruneFetches(); } if (playing) jump(cur); };
   };
   fill(zhSel, zh, zhKey);
   fill(enSel, en, enKey);
@@ -360,41 +361,129 @@ let runId = 0;
 let settle = null;       // resolves the sentence currently being spoken
 let midSentence = false; // edge engine: paused in the middle of an audio clip
 let lastError = '';
+let offlineSince = 0; // playback is waiting for the network since this time
 
-const audioCache = new Map(); // "voice\ntext" -> Promise<objectURL|null>
+// ---- Getting speech clips -------------------------------------------------------------------
+// Clips come from, in order: memory (object URLs), the browser's own clip cache (survives reloads,
+// works offline for anything heard or prefetched before), then the server. Upcoming sentences are
+// fetched ahead by *time* (about a minute of listening at the current speed), a few at a time, and
+// the sentence needed right now always jumps the queue.
+let LOOKAHEAD_SECONDS = 60, LOOKAHEAD_MIN = 4, LOOKAHEAD_MAX = 40, MAX_INFLIGHT = 3; // leaves room for the urgent one
+const CLIP_CACHE = 'bw-clips-v1', CLIP_CACHE_MAX = 3000;
+const audioCache = new Map(); // key -> {i, promise, start: fn while queued, url, ctrl}
+const fetchQueue = [];
+const running = new Set();  // entries being fetched right now
+let inflight = 0;
+const pipeline = { stalls: 0, waitedMs: 0, fromDevice: 0, fromServer: 0 }; // what playback had to wait for
+
 // Browsers mute time-stretched audio above ~4×, so faster playback asks the speech service for
 // 2× speech (its maximum) and stretches that by at most 3×: 6× = 2 × 3.
 const speedTier = () => (settings.rate > 3 ? 2 : 1);
 let clipTier = 1; // tier of the clip in the audio element
 const clipRate = () => Math.min(4, settings.rate / clipTier);
 
-function audioFor(i, tier = speedTier()) {
-  const t = S[i].t;
-  const voice = zhFor(t) ? settings.zhVoice : settings.enVoice;
-  const key = voice + '\n' + tier + '\n' + t;
-  let pr = audioCache.get(key);
-  if (pr) { audioCache.delete(key); audioCache.set(key, pr); return pr; }
-  pr = fetch('/api/tts', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice, text: t, speed: tier }),
-  }).then(checkAuth).then(async r => {
-    if (r.status === 204) return null;
-    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
-    return URL.createObjectURL(await r.blob());
-  });
-  pr.catch(() => audioCache.delete(key));
-  audioCache.set(key, pr);
-  while (audioCache.size > 80) {
-    const [oldKey, oldPr] = audioCache.entries().next().value;
-    audioCache.delete(oldKey);
-    oldPr.then(u => { if (u && audio.src !== u) URL.revokeObjectURL(u); }, () => {});
-  }
-  return pr;
+async function clipId(voice, tier, text) {
+  const digest = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(`${voice}\n${tier}\n${text}`));
+  return '/clip/' + [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-function prefetch(from) {
-  if (settings.engine !== 'edge') return;
-  for (let k = 1; k <= 4 && from + k < S.length; k++) {
-    if (speakable(S[from + k].t)) audioFor(from + k).catch(() => {});
+let clipPuts = 0;
+async function loadClip(voice, tier, text, signal) {
+  let cache = null, id = null;
+  try { cache = await caches.open(CLIP_CACHE); id = await clipId(voice, tier, text); } catch { cache = null; }
+  let r = cache && await cache.match(id);
+  if (r) pipeline.fromDevice++;
+  else {
+    r = checkAuth(await fetch('/api/tts', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice, text, speed: tier }), signal,
+    }));
+    if (r.status === 204) return null;
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+    pipeline.fromServer++;
+    if (cache) {
+      await cache.put(id, r.clone()).catch(() => {});
+      if (++clipPuts % 100 === 0) pruneClipCache(cache);
+    }
+  }
+  return URL.createObjectURL(await r.blob());
+}
+
+async function pruneClipCache(cache) {
+  const keys = await cache.keys(); // insertion order: oldest first
+  for (const k of keys.slice(0, Math.max(0, keys.length - CLIP_CACHE_MAX))) await cache.delete(k);
+}
+
+function pump() {
+  while (inflight < MAX_INFLIGHT && fetchQueue.length) fetchQueue.shift().start();
+}
+
+// urgent: needed now (skips the queue); otherwise it waits for a free slot.
+function clipKey(i, tier = speedTier()) {
+  const t = S[i].t;
+  return (zhFor(t) ? settings.zhVoice : settings.enVoice) + '\n' + tier + '\n' + t;
+}
+
+function audioFor(i, tier = speedTier(), urgent = true) {
+  const t = S[i].t;
+  const voice = zhFor(t) ? settings.zhVoice : settings.enVoice;
+  const key = clipKey(i, tier);
+  let e = audioCache.get(key);
+  if (e) {
+    audioCache.delete(key); audioCache.set(key, e); // most recently used
+    if (urgent && e.start) e.start();
+    return e.promise;
+  }
+  let resolve, reject;
+  e = { i, key, promise: new Promise((res, rej) => { resolve = res; reject = rej; }), start: null, url: null, ctrl: new AbortController() };
+  e.reject = reject;
+  const run = () => {
+    if (!e.start && e.started) return;
+    e.started = true; e.start = null;
+    const q = fetchQueue.indexOf(e);
+    if (q >= 0) fetchQueue.splice(q, 1);
+    inflight++;
+    running.add(e);
+    loadClip(voice, tier, t, e.ctrl.signal).then(u => { e.url = u; resolve(u); }, reject)
+      .finally(() => { inflight--; running.delete(e); pump(); });
+  };
+  e.start = run;
+  e.promise.catch(() => audioCache.delete(key));
+  audioCache.set(key, e);
+  if (urgent || inflight < MAX_INFLIGHT) run(); else fetchQueue.push(e);
+  // keep memory bounded: forget the least recently used finished clips
+  for (const [k, old] of audioCache) {
+    if (audioCache.size <= 160) break;
+    if (!old.url || old.url === audio.src) continue;
+    audioCache.delete(k);
+    URL.revokeObjectURL(old.url);
+  }
+  return e.promise;
+}
+
+// Drop fetches that are no longer useful: outside the window ahead of the current sentence, or for
+// a voice / speed tier that is no longer the one in use. Queued ones are removed, running ones aborted.
+function pruneFetches() {
+  for (const e of [...fetchQueue, ...running]) {
+    const useful = e.i >= cur && e.i <= cur + LOOKAHEAD_MAX && e.key === clipKey(e.i);
+    if (useful) continue;
+    const q = fetchQueue.indexOf(e);
+    if (q >= 0) fetchQueue.splice(q, 1);
+    if (running.has(e)) e.ctrl.abort();
+    else e.reject(new DOMException('stale', 'AbortError'));
+    audioCache.delete(e.key);
+  }
+  pump();
+}
+
+// Fetch about LOOKAHEAD_SECONDS of listening after sentence `from` (and `from` itself if asked).
+function prefetch(from, includeSelf = false) {
+  if (settings.engine !== 'edge' || !S.length) return;
+  let ahead = 0;
+  for (let k = includeSelf ? 0 : 1; k <= LOOKAHEAD_MAX && from + k < S.length; k++) {
+    const i = from + k;
+    if (speakable(S[i].t)) audioFor(i, speedTier(), k === 0).catch(() => {});
+    ahead += TI ? estimate(i, i + 1) : 3;
+    if (k >= LOOKAHEAD_MIN && ahead >= LOOKAHEAD_SECONDS) break;
   }
 }
 
@@ -408,9 +497,16 @@ function speakEdge(i, id) {
     let url;
     setLoading(true);
     const tier = speedTier();
+    const waitFrom = performance.now();
     try { url = await audioFor(i, tier); }
-    catch (e) { lastError = e.message; return finish('error'); }
+    catch (e) {
+      lastError = e.message;
+      // no connection (fetch itself failed) is worth waiting out; a server error is not
+      return finish(e.name === 'TypeError' || !navigator.onLine ? 'offline' : 'error');
+    }
     setLoading(false);
+    const waited = performance.now() - waitFrom;
+    if (waited > 50) { pipeline.stalls++; pipeline.waitedMs += waited; (pipeline.waits ||= []).push(Math.round(waited)); }
     if (done || id !== runId) return finish('abort');
     if (!url) { await sleep(400); return finish('end'); }
     audio.onended = () => finish('end');
@@ -458,6 +554,14 @@ async function loop(id) {
     prefetch(cur);
     const r = settings.engine === 'edge' ? await speakEdge(cur, id) : await speakBrowser(cur);
     if (id !== runId || !playing) return;
+    if (r === 'offline') {
+      // Keep "playing" and retry the same sentence until the connection is back (tunnels, lifts…).
+      if (!offlineSince) { offlineSince = Date.now(); toast('No connection. Will continue when it’s back…', 5000); }
+      setLoading(true);
+      await Promise.race([sleep(3000), new Promise(r => addEventListener('online', r, { once: true }))]);
+      continue;
+    }
+    if (offlineSince) { offlineSince = 0; toast('Back online', 2000); }
     if (r === 'error') {
       setPlaying(false);
       toast(settings.engine === 'edge'
@@ -551,8 +655,10 @@ function jump(i, autoplay = false) {
   runId++;
   halt();
   setCur(clamp(i, 0, S.length - 1), { scroll: 'jump' });
+  pruneFetches();
   if (autoplay && !playing) setPlaying(true);
   if (playing) loop(runId);
+  else if (mode === 'watch') prefetch(cur, true); // so Play starts at once
 }
 function jumpPara(dir) {
   const p = S[cur].p;
@@ -1078,6 +1184,7 @@ async function openBook(id, at) {
   showView('reader');
   setCur(clamp(at ?? st.pos ?? 0, 0, S.length - 1), { scroll: 'instant' });
   setMode(mode);
+  if (mode === 'watch') prefetch(cur, true);
   renderMarks();
   updateSelBar();
   saveNow();
