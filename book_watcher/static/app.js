@@ -130,7 +130,7 @@ function applySettings() {
   $('#setEngine').value = settings.engine;
   $('#setLang').value = settings.lang;
 
-  audio.playbackRate = settings.rate;
+  audio.playbackRate = clipRate();
   audio.volume = settings.volume;
 }
 
@@ -362,14 +362,20 @@ let midSentence = false; // edge engine: paused in the middle of an audio clip
 let lastError = '';
 
 const audioCache = new Map(); // "voice\ntext" -> Promise<objectURL|null>
-function audioFor(i) {
+// Browsers mute time-stretched audio above ~4×, so faster playback asks the speech service for
+// 2× speech (its maximum) and stretches that by at most 3×: 6× = 2 × 3.
+const speedTier = () => (settings.rate > 3 ? 2 : 1);
+let clipTier = 1; // tier of the clip in the audio element
+const clipRate = () => Math.min(4, settings.rate / clipTier);
+
+function audioFor(i, tier = speedTier()) {
   const t = S[i].t;
   const voice = zhFor(t) ? settings.zhVoice : settings.enVoice;
-  const key = voice + '\n' + t;
+  const key = voice + '\n' + tier + '\n' + t;
   let pr = audioCache.get(key);
   if (pr) { audioCache.delete(key); audioCache.set(key, pr); return pr; }
   pr = fetch('/api/tts', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice, text: t }),
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice, text: t, speed: tier }),
   }).then(checkAuth).then(async r => {
     if (r.status === 204) return null;
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
@@ -401,16 +407,18 @@ function speakEdge(i, id) {
     if (!speakable(t)) { await sleep(450 / settings.rate); return finish('end'); }
     let url;
     setLoading(true);
-    try { url = await audioFor(i); }
+    const tier = speedTier();
+    try { url = await audioFor(i, tier); }
     catch (e) { lastError = e.message; return finish('error'); }
     setLoading(false);
     if (done || id !== runId) return finish('abort');
     if (!url) { await sleep(400); return finish('end'); }
     audio.onended = () => finish('end');
     audio.onerror = () => { lastError = 'could not play audio'; finish('error'); };
-    audio.onloadedmetadata = () => learnPace(i, zhFor(t), audio.duration);
+    audio.onloadedmetadata = () => learnPace(i, zhFor(t), audio.duration * tier);
     audio.src = url;
-    audio.defaultPlaybackRate = audio.playbackRate = settings.rate;
+    clipTier = tier;
+    audio.defaultPlaybackRate = audio.playbackRate = clipRate();
     audio.volume = settings.volume;
     midSentence = true;
     audio.play().catch(e => {
@@ -1389,8 +1397,8 @@ function init() {
       'f': () => setCinema(!document.body.classList.contains('cinema')),
       'o': () => { if (!settings.sidebar) setSetting('sidebar', true); showTab('outline'); },
       ',': () => $('#btnSettings').click(),
-      '[': () => setSetting('rate', clamp(+(settings.rate - 0.1).toFixed(2), 0.5, 4)),
-      ']': () => setSetting('rate', clamp(+(settings.rate + 0.1).toFixed(2), 0.5, 4)),
+      '[': () => setSetting('rate', clamp(+(settings.rate - 0.1).toFixed(2), 0.5, 6)),
+      ']': () => setSetting('rate', clamp(+(settings.rate + 0.1).toFixed(2), 0.5, 6)),
       '=': () => setSetting('size', clamp(settings.size + 4, 22, 110)),
       '+': () => setSetting('size', clamp(settings.size + 4, 22, 110)),
       '-': () => setSetting('size', clamp(settings.size - 4, 22, 110)),

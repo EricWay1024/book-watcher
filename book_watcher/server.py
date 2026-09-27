@@ -251,8 +251,9 @@ class Library:
         return sorted(out, key=lambda b: -b["opened"])
 
 
-async def synthesize(lib: Store, voice: str, text: str) -> Path | None:
-    key = hashlib.sha1(f"{voice}\n{text}".encode()).hexdigest()
+async def synthesize(lib: Store, voice: str, text: str, speed: int = 1) -> Path | None:
+    # speed 2 = spoken twice as fast by the service itself (its maximum), for playback above 3×
+    key = hashlib.sha1(f"{voice}\n{text}".encode() + (b"\nx2" if speed == 2 else b"")).hexdigest()
     path = lib.tts / key[:2] / f"{key}.mp3"
     if path.exists():
         path.touch()  # mtime = last use, for cache pruning
@@ -267,7 +268,7 @@ async def synthesize(lib: Store, voice: str, text: str) -> Path | None:
             async with TTS_SLOTS:
                 for attempt in range(3):
                     try:
-                        await edge_tts.Communicate(text, voice).save(str(tmp))
+                        await edge_tts.Communicate(text, voice, rate="+100%" if speed == 2 else "+0%").save(str(tmp))
                         break
                     except edge_tts.exceptions.NoAudioReceived:
                         return None  # nothing speakable (e.g. "***")
@@ -515,7 +516,7 @@ def make_app(store: Store, users: Users, cache_mb: int = 0) -> web.Application:
         if not re.fullmatch(r"[a-z]{2,3}-[A-Za-z]{2,4}(-[a-z]+)?-\w+Neural", voice) or not text:
             return web.json_response({"error": "bad voice or text"}, status=400)
         try:
-            path = await synthesize(store, voice, text[:1000])
+            path = await synthesize(store, voice, text[:1000], 2 if body.get("speed") == 2 else 1)
         except Exception as e:
             return web.json_response({"error": f"speech service failed: {e}"}, status=502)
         if path is None:
